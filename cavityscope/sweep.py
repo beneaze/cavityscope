@@ -44,18 +44,25 @@ def _acquire_with_retry(
     max_retries: int = 3,
     verbose: bool = False,
 ):
-    """Acquire a single trace, retrying up to *max_retries* times on empty data."""
+    """Acquire a single trace, retrying on empty data or read errors."""
+    last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
-        scope.acquire_single_and_wait(timeout_s=timeout_s, settle_s=settle_s)
-        t, y, info = scope.read_waveform(channel)
-        if t.size > 0:
-            return t, y, info
+        try:
+            scope.acquire_single_and_wait(timeout_s=timeout_s, settle_s=settle_s)
+            t, y, info = scope.read_waveform(channel)
+            if t.size > 0:
+                return t, y, info
+            reason = "empty waveform"
+        except Exception as exc:
+            last_error = exc
+            reason = str(exc)
         if verbose:
-            print(f"    [retry {attempt}/{max_retries}] scope returned empty waveform, re-acquiring...")
+            print(f"    [retry {attempt}/{max_retries}] {reason}, re-acquiring...")
         time.sleep(0.5)
-    raise RuntimeError(
-        f"Scope returned empty waveform after {max_retries} retries on channel {channel}."
-    )
+    msg = f"Scope read failed after {max_retries} retries on channel {channel}."
+    if last_error is not None:
+        raise RuntimeError(msg) from last_error
+    raise RuntimeError(msg)
 
 
 def run_power_calibration(
