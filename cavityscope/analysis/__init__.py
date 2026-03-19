@@ -13,6 +13,11 @@ from cavityscope.analysis.plotting import (
     plot_live_calibration,
     plot_vpi_vs_frequency,
 )
+from cavityscope.analysis.postprocess import (
+    apply_calibration,
+    compute_vpi_fits,
+    reanalyze_with_calibration,
+)
 
 __all__ = [
     "ReferenceInfo",
@@ -28,4 +33,7 @@ __all__ = [
     "plot_power_calibration",
     "plot_live_calibration",
     "plot_vpi_vs_frequency",
+    "apply_calibration",
+    "compute_vpi_fits",
+    "reanalyze_with_calibration",
 ]

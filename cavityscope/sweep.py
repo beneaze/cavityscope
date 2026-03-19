@@ -1,7 +1,8 @@
-"""Orchestration logic for an RF Vpi sweep.
+"""Hardware orchestration for an RF Vpi sweep.
 
-This module is hardware-agnostic: it accepts any objects satisfying
-``ScopeInterface`` and ``RFSourceInterface`` from ``cavityscope.core``.
+This module drives oscilloscopes and RF sources via the interfaces in
+``cavityscope.core``.  All pure-analysis logic (voltage calibration,
+Vpi fitting, reanalysis) lives in ``cavityscope.analysis``.
 """
 
 from __future__ import annotations
@@ -18,15 +19,13 @@ from cavityscope.analysis.measurement import (
     measure_trace_against_reference,
 )
 from cavityscope.analysis.plotting import (
-    plot_beta_fit,
     plot_power_calibration,
     plot_trace_frequency_space,
     plot_trace_with_windows,
-    plot_vpi_vs_frequency,
 )
+from cavityscope.analysis.postprocess import compute_vpi_fits
 from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.rf_voltage import extract_vpk_from_trace
-from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
 from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.instruments import RFSourceInterface, ScopeInterface
@@ -221,7 +220,6 @@ def run_sweep(
 
     results: List[Dict] = []
     reference_rows: List[Dict] = []
-    fit_rows: List[Dict] = []
 
     for freq_hz in cfg.rf_frequencies_hz:
         freq_hz = float(freq_hz)
@@ -363,21 +361,7 @@ def run_sweep(
 
     df = pd.DataFrame(results)
     ref_df = pd.DataFrame(reference_rows)
-    fit_df = pd.DataFrame()
-
-    if not df.empty and cfg.compute_vpi:
-        for fhz, dfg in df.groupby("rf_frequency_hz"):
-            fit_row = {"rf_frequency_hz": float(fhz), **fit_beta_vs_vpk(dfg, cfg)}
-            fit_rows.append(fit_row)
-            plot_beta_fit(
-                dfg,
-                fit_row,
-                dirs["fit_dir"] / f"vpi_fit_{fhz/1e6:.4f}MHz.png",
-                float(fhz),
-                cfg,
-            )
-        fit_df = pd.DataFrame(fit_rows)
-        plot_vpi_vs_frequency(fit_df, run_dir / "vpi_vs_frequency.png")
+    fit_df = compute_vpi_fits(df, cfg, output_dir=run_dir)
 
     df.to_csv(run_dir / "sweep_results.csv", index=False)
     ref_df.to_csv(run_dir / "reference_summary.csv", index=False)
