@@ -392,7 +392,10 @@ def plot_calibration_fit(
     if not np.isfinite(offset):
         offset = float(np.mean(v_win))
 
-    fit_curve = vpk * np.sin(2.0 * np.pi * f_fit * t_win + phase) + offset
+    # Reconstruct fit on the same centred time axis used by the fitter
+    t0 = meas.get("fit_t0_s", float(t_win[0] + t_win[-1]) / 2.0)
+    t_rel = t_win - t0
+    fit_curve = vpk * np.sin(2.0 * np.pi * f_fit * t_rel + phase) + offset
     residual = v_win - fit_curve
 
     fig, (ax_top, ax_bot) = plt.subplots(

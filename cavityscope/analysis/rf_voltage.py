@@ -53,13 +53,19 @@ def extract_vpk_from_trace(
     t_win = t[i0:i1]
     v_win = v[i0:i1]
 
+    # Centre time around zero so the phase parameter is meaningful.
+    # Without this, 2π·f·t accumulates ~10⁸ radians and the optimizer
+    # cannot resolve phase from frequency.
+    t0 = float(t_win[0] + t_win[-1]) / 2.0
+    t_rel = t_win - t0
+
     amp_guess = 0.5 * float(np.max(v_win) - np.min(v_win))
     offset_guess = float(np.mean(v_win))
 
     try:
         popt, _ = curve_fit(
             _sine_model,
-            t_win,
+            t_rel,
             v_win,
             p0=[amp_guess, rf_frequency_hz, 0.0, offset_guess],
             bounds=(
@@ -93,4 +99,5 @@ def extract_vpk_from_trace(
         "fit_converged": fit_ok,
         "fit_window_samples": int(i1 - i0),
         "fit_window_duration_s": float((i1 - i0) * dt),
+        "fit_t0_s": t0,
     }
