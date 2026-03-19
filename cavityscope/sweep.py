@@ -137,7 +137,6 @@ def run_power_calibration(
                 desired_window = min_visible_cycles * rf_period
                 scale = desired_window / 10.0
             scope.set_timebase(scale)
-            scope.set_trigger_mode("AUTO")
             time.sleep(0.1)
 
             actual_scale = scope.get_timebase()
