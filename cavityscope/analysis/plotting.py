@@ -356,3 +356,64 @@ def plot_vpi_vs_frequency(
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
     plt.close(fig)
+
+
+def plot_calibration_fit(
+    t: np.ndarray,
+    v: np.ndarray,
+    rf_frequency_hz: float,
+    meas: dict,
+    out_png: Path | str,
+    n_cycles: int = 20,
+) -> None:
+    """Plot a calibration sine fit overlaid on the scope trace.
+
+    Shows the analysis window, raw data, fitted sine, and residuals.
+    """
+    dt = float(np.median(np.diff(t)))
+    rf_period = 1.0 / rf_frequency_hz
+    window_samples = max(4, int(round(n_cycles * rf_period / dt)))
+    mid = len(v) // 2
+    half_win = window_samples // 2
+    i0 = max(0, mid - half_win)
+    i1 = min(len(v), mid + half_win)
+    t_win = t[i0:i1]
+    v_win = v[i0:i1]
+
+    vpk = meas["measured_vpk_v"]
+    f_fit = meas["fit_frequency_hz"]
+    phase = meas.get("fit_phase_rad", 0.0)
+    offset = meas.get("fit_dc_offset_v", 0.0)
+    converged = meas.get("fit_converged", True)
+    power_dbm = meas.get("power_dbm", float("nan"))
+
+    fit_curve = vpk * np.sin(2.0 * np.pi * f_fit * t_win + phase) + offset
+    residual = v_win - fit_curve
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(10, 5), sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+
+    ax_top.plot(t_win * 1e9, v_win, color="C0", lw=0.6, alpha=0.7, label="data")
+    ax_top.plot(t_win * 1e9, fit_curve, color="tab:red", lw=1.2,
+                label=f"fit: Vpk={vpk:.4f} V, f={f_fit/1e6:.2f} MHz")
+    status = "converged" if converged else "FALLBACK"
+    ax_top.set_title(
+        f"Cal fit \u2014 f_RF={rf_frequency_hz/1e9:.4f} GHz, "
+        f"P_RF={power_dbm:+.1f} dBm  [{status}]",
+        fontsize=10,
+    )
+    ax_top.set_ylabel("Voltage (V)")
+    ax_top.legend(loc="upper right", fontsize=8)
+    ax_top.grid(True, alpha=0.2)
+
+    ax_bot.plot(t_win * 1e9, residual * 1e3, color="C2", lw=0.5)
+    ax_bot.axhline(0, ls="-", lw=0.5, color="gray")
+    ax_bot.set_xlabel("Time (ns)")
+    ax_bot.set_ylabel("Residual (mV)")
+    ax_bot.grid(True, alpha=0.2)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=120)
+    plt.close(fig)

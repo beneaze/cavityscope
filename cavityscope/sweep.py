@@ -19,6 +19,7 @@ from cavityscope.analysis.measurement import (
     measure_trace_against_reference,
 )
 from cavityscope.analysis.plotting import (
+    plot_calibration_fit,
     plot_trace_frequency_space,
     plot_trace_with_windows,
 )
@@ -111,6 +112,7 @@ def run_power_calibration(
     time.sleep(0.2)
 
     rows: List[Dict] = []
+    fit_plot_dir = ensure_dir(out / "fit_plots")
 
     try:
         for freq_hz in cfg.rf_frequencies_hz:
@@ -143,12 +145,23 @@ def run_power_calibration(
                     rf_frequency_hz=freq_hz,
                     n_cycles=n_cycles,
                 )
+                meas["power_dbm"] = power_dbm
                 rows.append({
                     "frequency_hz": freq_hz,
                     "power_dbm": power_dbm,
                     "vpk_v": meas["measured_vpk_v"],
-                    **{k: v for k, v in meas.items() if k != "measured_vpk_v"},
+                    **{k: v for k, v in meas.items()
+                       if k not in ("measured_vpk_v", "power_dbm")},
                 })
+
+                plot_calibration_fit(
+                    t_rf, v_rf,
+                    rf_frequency_hz=freq_hz,
+                    meas=meas,
+                    out_png=fit_plot_dir
+                    / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
+                    n_cycles=n_cycles,
+                )
 
                 if verbose:
                     ok = "ok" if meas["fit_converged"] else "FALLBACK"
