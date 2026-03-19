@@ -37,7 +37,8 @@ def _integrate_window(
     idx = np.flatnonzero(mask)
     if idx.size < 2:
         raise ValueError("Integration window outside trace or too small.")
-    area = float(np.trapezoid(y[idx], t[idx]))
+    _trapz = getattr(np, "trapezoid", np.trapz)
+    area = float(_trapz(y[idx], t[idx]))
     center_height = float(np.interp(center_t, t, y))
     return area, center_height, int(idx.size)
 
