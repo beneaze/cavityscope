@@ -121,6 +121,7 @@ def run_power_calibration(
     rows: List[Dict] = []
     fit_plot_dir = ensure_dir(out / "fit_plots")
 
+    manual_timebase = cfg.cal_timebase_s_per_div
     min_visible_cycles = max(n_cycles, 5)
 
     try:
@@ -128,8 +129,11 @@ def run_power_calibration(
             freq_hz = float(freq_hz)
             rf_period = 1.0 / freq_hz
 
-            desired_window = min_visible_cycles * rf_period
-            scale = desired_window / 10.0
+            if manual_timebase is not None:
+                scale = manual_timebase
+            else:
+                desired_window = min_visible_cycles * rf_period
+                scale = desired_window / 10.0
             scope.set_timebase(scale)
             scope.set_trigger_mode("AUTO")
             time.sleep(0.1)
@@ -139,10 +143,10 @@ def run_power_calibration(
             actual_cycles = actual_window / rf_period
 
             if verbose:
+                mode = "manual" if manual_timebase is not None else "auto"
                 print(
                     f"\n  f = {freq_hz/1e9:.4f} GHz  "
-                    f"(requested {scale:.3E} s/div, "
-                    f"actual {actual_scale:.3E} s/div, "
+                    f"({mode}: {actual_scale:.3E} s/div, "
                     f"~{actual_cycles:.0f} cycles visible)"
                 )
 

@@ -74,6 +74,7 @@ class SweepConfig:
     # measures Vpk via sine fit, and returns a PowerCalibration object.
     cal_scope_channel: Optional[int] = None
     cal_cycles_to_capture: int = 20
+    cal_timebase_s_per_div: Optional[float] = None
     cal_settle_s: float = 0.15
 
     # -- Output ----------------------------------------------------------------
