@@ -1,3 +1,4 @@
+from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.instruments import ScopeInterface, RFSourceInterface
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.utils import (
@@ -7,6 +8,7 @@ from cavityscope.core.utils import (
 )
 
 __all__ = [
+    "PowerCalibration",
     "ScopeInterface",
     "RFSourceInterface",
     "SweepConfig",

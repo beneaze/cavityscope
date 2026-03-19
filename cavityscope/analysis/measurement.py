@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
@@ -17,6 +17,9 @@ from cavityscope.core.utils import (
     robust_baseline,
     robust_noise_sigma,
 )
+
+if TYPE_CHECKING:
+    from cavityscope.core.calibration import PowerCalibration
 
 
 def _smooth_and_baseline(y_v: np.ndarray, cfg: SweepConfig):
@@ -146,12 +149,29 @@ def measure_trace_against_reference(
 
 
 def add_voltage_columns(
-    row: Dict[str, float], rf_power_dbm: float, cfg: SweepConfig
+    row: Dict[str, float],
+    rf_power_dbm: float,
+    cfg: SweepConfig,
+    calibration: Optional["PowerCalibration"] = None,
+    rf_frequency_hz: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Append estimated voltage columns derived from the nominal RF power."""
+    """Append voltage columns — calibrated when available, analytical otherwise.
+
+    When *calibration* is provided the Vpk comes from the interpolated
+    calibration table.  Otherwise the nominal ``dBm → Vrms → Vpk`` conversion
+    is used (subject to ``net_power_offset_db`` and ``assumed_load_ohm``).
+    """
     delivered_dbm = rf_power_dbm + cfg.net_power_offset_db
-    vrms = dbm_to_vrms_into_r(delivered_dbm, cfg.assumed_load_ohm)
-    vpk = math.sqrt(2.0) * vrms
+
+    if calibration is not None:
+        vpk = calibration.vpk(rf_power_dbm, frequency_hz=rf_frequency_hz)
+        vrms = vpk / math.sqrt(2.0)
+        row["voltage_source"] = "calibration"
+    else:
+        vrms = dbm_to_vrms_into_r(delivered_dbm, cfg.assumed_load_ohm)
+        vpk = math.sqrt(2.0) * vrms
+        row["voltage_source"] = "analytical"
+
     vpp = 2.0 * vpk
     row["estimated_delivered_dbm"] = delivered_dbm
     row["estimated_vrms_at_load"] = vrms

@@ -61,6 +61,11 @@ class SweepConfig:
     net_power_offset_db: float = 0.0
     assumed_load_ohm: float = 50.0
 
+    # -- Power calibration (optional) ------------------------------------------
+    # Path to a CSV with columns: power_dbm, vpk_v (and optionally frequency_hz).
+    # When set, calibrated voltages replace the analytical dBm-to-V conversion.
+    power_calibration_csv: Optional[str] = None
+
     # -- Output ----------------------------------------------------------------
     output_dir: str = "vpi_sweep_output"
     save_trace_plots: bool = True

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -24,6 +24,7 @@ from cavityscope.analysis.plotting import (
 )
 from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
+from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.instruments import RFSourceInterface, ScopeInterface
 from cavityscope.core.utils import make_measurement_output_dirs
@@ -34,6 +35,7 @@ def run_sweep(
     rf_source: RFSourceInterface,
     cfg: SweepConfig,
     scope_channel: int = 1,
+    calibration: Optional[PowerCalibration] = None,
     verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
     """Execute a full RF Vpi sweep and return result DataFrames.
@@ -48,6 +50,10 @@ def run_sweep(
         Sweep configuration.
     scope_channel : int
         Which scope channel to read (1-4).
+    calibration : PowerCalibration, optional
+        If provided, maps (power_dBm, frequency_hz) to actual Vpk.
+        Overrides the analytical dBm→V conversion.  Can also be loaded
+        automatically from ``cfg.power_calibration_csv``.
     verbose : bool
         Print progress to stdout.
 
@@ -56,6 +62,9 @@ def run_sweep(
     dict with keys ``"results"``, ``"references"``, ``"fits"``
         Each value is a :class:`pandas.DataFrame`.
     """
+    if calibration is None and cfg.power_calibration_csv is not None:
+        calibration = PowerCalibration.from_csv(cfg.power_calibration_csv)
+
     dirs = make_measurement_output_dirs(cfg.output_dir)
     run_dir = dirs["run_dir"]
 
@@ -65,6 +74,8 @@ def run_sweep(
     if verbose:
         print("Measurement folder:", run_dir)
         print("Connected scope:", scope.idn())
+        if calibration is not None:
+            print("Power calibration:", calibration)
 
     rf_source.set_output(False)
     time.sleep(0.2)
@@ -163,7 +174,11 @@ def run_sweep(
                 "reference_fsr_time_s": ref.fsr_time_s,
                 **meas,
             }
-            row = add_voltage_columns(row, power_dbm, cfg)
+            row = add_voltage_columns(
+                row, power_dbm, cfg,
+                calibration=calibration,
+                rf_frequency_hz=freq_hz,
+            )
             results.append(row)
 
             if cfg.save_trace_plots:
