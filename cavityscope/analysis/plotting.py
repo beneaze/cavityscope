@@ -329,12 +329,6 @@ def plot_vpi_vs_frequency(
             textcoords="offset points", xytext=(0, 8),
             fontsize=7, ha="center", alpha=0.7,
         )
-    vpi_median = float(np.nanmedian(vpi[valid]))
-    ax_vpi.axhline(
-        vpi_median, ls="--", lw=0.8, color="gray", alpha=0.5,
-        label=f"median = {vpi_median:.3f} V",
-    )
-
     idx_min = int(np.nanargmin(vpi[valid]))
     f_min, v_min = freq_ghz[valid][idx_min], vpi[valid][idx_min]
     ax_vpi.axvline(f_min, ls=":", lw=0.8, color="tab:red", alpha=0.6)
