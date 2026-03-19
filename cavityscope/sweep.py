@@ -131,6 +131,10 @@ def run_power_calibration(
             freq_hz = float(freq_hz)
             rf_period = 1.0 / freq_hz
 
+            # Turn RF off while we reconfigure the scope timebase so
+            # the scope never sees a turn-on transient.
+            rf_source.set_output(False)
+
             if manual_timebase is not None:
                 scale = manual_timebase
             else:
@@ -151,9 +155,16 @@ def run_power_calibration(
                     f"~{actual_cycles:.0f} cycles visible)"
                 )
 
+            # Enable RF output once per frequency; subsequent power
+            # changes only adjust amplitude without re-toggling enable,
+            # avoiding turn-on transients that can false-trigger the scope.
+            rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
+                            enabled=True)
+            time.sleep(cfg.cal_settle_s)
+
             for power_dbm in cfg.rf_powers_dbm:
                 power_dbm = float(power_dbm)
-                rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm, enabled=True)
+                rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
                 time.sleep(cfg.cal_settle_s)
 
                 t_rf, v_rf, _ = _acquire_with_retry(
@@ -330,12 +341,18 @@ def run_sweep(
                 index=False,
             )
 
+        # Enable RF once before the power sweep; subsequent power
+        # changes only adjust amplitude, avoiding turn-on transients.
+        rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
+                        enabled=True)
+        time.sleep(cfg.settle_after_rf_change_s)
+
         for power_dbm in cfg.rf_powers_dbm:
             power_dbm = float(power_dbm)
             if verbose:
                 print(f"  power = {power_dbm:7.3f} dBm")
 
-            rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm, enabled=True)
+            rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
             time.sleep(cfg.settle_after_rf_change_s)
 
             t, y, _ = _acquire_with_retry(
