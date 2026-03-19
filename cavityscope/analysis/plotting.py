@@ -229,3 +229,59 @@ def plot_beta_fit(
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
     plt.close(fig)
+
+
+def plot_vpi_vs_frequency(
+    fit_df: pd.DataFrame,
+    out_png: Path | str,
+) -> None:
+    """Plot Vpi and fit R squared as a function of RF frequency.
+
+    The top panel shows Vpi(f) with a median reference line and the number
+    of fit points annotated at each frequency. The bottom panel shows the
+    fit R squared so you can spot unreliable fits at a glance.
+    """
+    if fit_df.empty or "fit_vpi_v" not in fit_df.columns:
+        return
+
+    freq_ghz = fit_df["rf_frequency_hz"].to_numpy(dtype=float) / 1e9
+    vpi = fit_df["fit_vpi_v"].to_numpy(dtype=float)
+    r2 = fit_df["fit_r2"].to_numpy(dtype=float)
+    n_pts = fit_df["n_fit_points"].to_numpy(dtype=float)
+
+    valid = np.isfinite(vpi)
+    if not valid.any():
+        return
+
+    fig, (ax_vpi, ax_r2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+
+    ax_vpi.plot(
+        freq_ghz[valid], vpi[valid], "o-", markersize=7, lw=1.5, label="$V_\\pi$",
+    )
+    for f, v, n in zip(freq_ghz[valid], vpi[valid], n_pts[valid]):
+        ax_vpi.annotate(
+            f"N={int(n)}", (f, v),
+            textcoords="offset points", xytext=(0, 8),
+            fontsize=7, ha="center", alpha=0.7,
+        )
+    vpi_median = float(np.nanmedian(vpi[valid]))
+    ax_vpi.axhline(
+        vpi_median, ls="--", lw=0.8, color="gray", alpha=0.5,
+        label=f"median = {vpi_median:.3f} V",
+    )
+    ax_vpi.set_ylabel("$V_\\pi$ (V)")
+    ax_vpi.set_title("$V_\\pi$ vs RF frequency")
+    ax_vpi.grid(True, alpha=0.25)
+    ax_vpi.legend(loc="best")
+
+    bar_width = 0.8 * float(np.min(np.diff(freq_ghz))) if len(freq_ghz) > 1 else 0.1
+    ax_r2.bar(freq_ghz[valid], r2[valid], width=bar_width, alpha=0.7)
+    ax_r2.set_ylim(0, 1.05)
+    ax_r2.axhline(0.99, ls=":", lw=0.8, color="gray", alpha=0.5, label="R\u00b2 = 0.99")
+    ax_r2.set(xlabel="RF frequency (GHz)", ylabel="Fit R\u00b2")
+    ax_r2.grid(True, alpha=0.25)
+    ax_r2.legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=140)
+    plt.close(fig)

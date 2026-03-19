@@ -21,6 +21,7 @@ from cavityscope.analysis.plotting import (
     plot_beta_fit,
     plot_trace_frequency_space,
     plot_trace_with_windows,
+    plot_vpi_vs_frequency,
 )
 from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
@@ -236,6 +237,7 @@ def run_sweep(
                 cfg,
             )
         fit_df = pd.DataFrame(fit_rows)
+        plot_vpi_vs_frequency(fit_df, run_dir / "vpi_vs_frequency.png")
 
     df.to_csv(run_dir / "sweep_results.csv", index=False)
     ref_df.to_csv(run_dir / "reference_summary.csv", index=False)
