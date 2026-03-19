@@ -58,6 +58,8 @@ def _acquire_with_retry(
             reason = str(exc)
         if verbose:
             print(f"    [retry {attempt}/{max_retries}] {reason}, re-acquiring...")
+        if hasattr(scope, "flush"):
+            scope.flush()
         time.sleep(0.5)
     msg = f"Scope read failed after {max_retries} retries on channel {channel}."
     if last_error is not None:
