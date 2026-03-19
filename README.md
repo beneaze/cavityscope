@@ -23,8 +23,8 @@ notebooks/
 
 ## How Vpi is extracted from the modulation-index fit
 
-The half-wave voltage \(V_\pi\) is the voltage at which the electro-optic
-phase modulator imparts a phase shift of \(\pi\) radians. `cavityscope`
+The half-wave voltage $V_\pi$ is the voltage at which the electro-optic
+phase modulator imparts a phase shift of $\pi$ radians. `cavityscope`
 extracts it from cavity transmission traces in four stages.
 
 ### 1. Reference trace (RF off)
@@ -32,7 +32,7 @@ extracts it from cavity transmission traces in four stages.
 With the RF drive off, a scope trace of the scanning Fabry–Pérot
 transmission is acquired. Peak-finding on the smoothed, baseline-subtracted
 signal locates the cavity resonances (carriers). The free spectral range
-(FSR) in time, \(\Delta t_\text{FSR}\), is taken as the median spacing
+(FSR) in time, $\Delta t_\text{FSR}$, is taken as the median spacing
 between adjacent peaks.
 
 ### 2. Sideband and carrier integration (RF on)
@@ -40,30 +40,30 @@ between adjacent peaks.
 For each RF power/frequency setting the modulator is driven and a new scope
 trace is captured. The first-order sidebands appear at time offsets
 
-\[
+$$
 \delta t = \Delta t_\text{FSR}\;\frac{f_\text{RF}}{f_\text{FSR}}
-\]
+$$
 
 from the carrier. Integration windows (configurable in Hz, mapped to time
-via the FSR) are placed around the carrier and the \(\pm 1\) sidebands.
+via the FSR) are placed around the carrier and the $\pm 1$ sidebands.
 The integrated area of each peak is computed with the trapezoidal rule on
 the smoothed trace after baseline subtraction.
 
 ### 3. Modulation index (beta) from the Bessel ratio
 
-For a pure phase modulator driven at modulation index \(\beta\), the
+For a pure phase modulator driven at modulation index $\beta$, the
 electric field acquires sidebands whose amplitudes are Bessel functions of
-the first kind. The carrier power scales as \(J_0(\beta)^2\) and each
-first-order sideband as \(J_1(\beta)^2\). The measured ratio of sideband
+the first kind. The carrier power scales as $J_0(\beta)^2$ and each
+first-order sideband as $J_1(\beta)^2$. The measured ratio of sideband
 area to carrier area therefore satisfies
 
-\[
+$$
 R \;=\; \frac{A_\text{sideband}}{A_\text{carrier}}
      \;=\; \frac{J_1(\beta)^2}{J_0(\beta)^2}.
-\]
+$$
 
-This equation is numerically inverted for \(\beta\) on the first monotonic
-branch \(0 < \beta < 2.4048\) (the first zero of \(J_0\)) using Brent's
+This equation is numerically inverted for $\beta$ on the first monotonic
+branch $0 < \beta < 2.4048$ (the first zero of $J_0$) using Brent's
 root-finding method (`solve_beta_from_ratio` in `vpi_fitting.py`).
 
 Points are excluded from the subsequent fit when:
@@ -76,27 +76,27 @@ Points are excluded from the subsequent fit when:
 
 By definition of the half-wave voltage,
 
-\[
+$$
 \beta \;=\; \frac{\pi\, V_\text{pk}}{V_\pi},
-\]
+$$
 
-so \(\beta\) is linear in the peak drive voltage \(V_\text{pk}\) with slope
-\(m = \pi / V_\pi\). A linear fit (with or without intercept, controlled by
-`fit_include_intercept`) of the surviving \((\hat V_\text{pk},\,\hat\beta)\)
+so $\beta$ is linear in the peak drive voltage $V_\text{pk}$ with slope
+$m = \pi / V_\pi$. A linear fit (with or without intercept, controlled by
+`fit_include_intercept`) of the surviving $(\hat V_\text{pk},\,\hat\beta)$
 points yields the slope, from which
 
-\[
+$$
 V_\pi \;=\; \frac{\pi}{m}.
-\]
+$$
 
-The fit quality is reported as \(R^2\), and the result is stored per RF
+The fit quality is reported as $R^2$, and the result is stored per RF
 frequency in the `vpi_fit_summary.csv` output.
 
-> **Voltage estimation.** \(V_\text{pk}\) at the modulator is either
+> **Voltage estimation.** $V_\text{pk}$ at the modulator is either
 > calculated analytically from the set-point dBm
-> (\(V_\text{rms} = \sqrt{P \cdot R}\), \(V_\text{pk} = \sqrt{2}\,V_\text{rms}\))
+> ($V_\text{rms} = \sqrt{P \cdot R}$, $V_\text{pk} = \sqrt{2}\,V_\text{rms}$)
 > or looked up from an optional power-calibration table that maps
-> `(power_dbm, frequency_hz)` to measured \(V_\text{pk}\).
+> `(power_dbm, frequency_hz)` to measured $V_\text{pk}$.
 
 ## Design principles
 
