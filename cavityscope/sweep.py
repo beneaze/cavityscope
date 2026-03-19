@@ -114,20 +114,30 @@ def run_power_calibration(
     rows: List[Dict] = []
     fit_plot_dir = ensure_dir(out / "fit_plots")
 
+    min_visible_cycles = max(n_cycles, 5)
+
     try:
         for freq_hz in cfg.rf_frequencies_hz:
             freq_hz = float(freq_hz)
+            rf_period = 1.0 / freq_hz
 
-            # 10 divs on screen → total window = 10 * scale
-            # We want n_cycles / freq_hz seconds visible
-            desired_window = n_cycles / freq_hz
+            desired_window = min_visible_cycles * rf_period
             scale = desired_window / 10.0
             scope.set_timebase(scale)
             scope.set_trigger_mode("AUTO")
             time.sleep(0.1)
 
+            actual_scale = scope.get_timebase()
+            actual_window = actual_scale * 10.0
+            actual_cycles = actual_window / rf_period
+
             if verbose:
-                print(f"\n  f = {freq_hz/1e9:.4f} GHz  (timebase {scale:.3E} s/div)")
+                print(
+                    f"\n  f = {freq_hz/1e9:.4f} GHz  "
+                    f"(requested {scale:.3E} s/div, "
+                    f"actual {actual_scale:.3E} s/div, "
+                    f"~{actual_cycles:.0f} cycles visible)"
+                )
 
             for power_dbm in cfg.rf_powers_dbm:
                 power_dbm = float(power_dbm)
@@ -140,10 +150,11 @@ def run_power_calibration(
                     max_retries=cfg.scope_read_max_retries, verbose=verbose,
                 )
 
+                fit_cycles = max(5, int(actual_cycles))
                 meas = extract_vpk_from_trace(
                     t_rf, v_rf,
                     rf_frequency_hz=freq_hz,
-                    n_cycles=n_cycles,
+                    n_cycles=fit_cycles,
                 )
                 meas["power_dbm"] = power_dbm
                 rows.append({
@@ -165,7 +176,7 @@ def run_power_calibration(
                         meas=meas,
                         out_png=fit_plot_dir
                         / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
-                        n_cycles=n_cycles,
+                        n_cycles=fit_cycles,
                     )
                 except Exception as exc:
                     if verbose:
