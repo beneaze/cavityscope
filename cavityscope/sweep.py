@@ -19,17 +19,20 @@ from cavityscope.analysis.measurement import (
     measure_trace_against_reference,
 )
 from cavityscope.analysis.plotting import (
-    plot_power_calibration,
     plot_trace_frequency_space,
     plot_trace_with_windows,
 )
-from cavityscope.analysis.postprocess import compute_vpi_fits
+from cavityscope.analysis.postprocess import build_calibration, compute_vpi_fits
 from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.rf_voltage import extract_vpk_from_trace
 from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.instruments import RFSourceInterface, ScopeInterface
-from cavityscope.core.utils import ensure_dir, make_measurement_output_dirs
+from cavityscope.core.utils import (
+    ensure_dir,
+    make_calibration_output_dir,
+    make_measurement_output_dirs,
+)
 
 
 def _acquire_with_retry(
@@ -94,7 +97,10 @@ def run_power_calibration(
 
     cal_ch = cfg.cal_scope_channel
     n_cycles = cfg.cal_cycles_to_capture
-    out = ensure_dir(output_dir or cfg.output_dir)
+    out = make_calibration_output_dir(output_dir or cfg.output_dir)
+
+    with open(out / "config_used.json", "w", encoding="utf-8") as f:
+        json.dump(cfg.to_dict(), f, indent=2)
 
     original_timebase = scope.get_timebase()
     if verbose:
@@ -155,15 +161,10 @@ def run_power_calibration(
             print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
 
     cal_df = pd.DataFrame(rows)
-    cal_df.to_csv(out / "power_calibration.csv", index=False)
-    plot_power_calibration(cal_df, out / "power_calibration.png")
-    if verbose:
-        print(f"  Saved: {out / 'power_calibration.csv'}")
-        print(f"  Saved: {out / 'power_calibration.png'}")
+    calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
 
-    calibration = PowerCalibration(cal_df)
     if verbose:
-        print(f"  {calibration}")
+        print(f"  Calibration folder: {out}")
 
     return calibration
 

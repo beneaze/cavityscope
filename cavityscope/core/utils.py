@@ -29,6 +29,11 @@ def make_measurement_output_dirs(base_output_dir: str | Path) -> Dict[str, Path]
     }
 
 
+def make_calibration_output_dir(base_output_dir: str | Path) -> Path:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    return ensure_dir(Path(base_output_dir) / f"calibration_{timestamp}")
+
+
 def dbm_to_watts(dbm: float) -> float:
     return 1e-3 * (10.0 ** (dbm / 10.0))
 

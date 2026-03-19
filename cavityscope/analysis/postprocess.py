@@ -1,4 +1,4 @@
-"""Post-hoc (re-)analysis of sweep results: voltage calibration and Vpi fitting.
+"""Post-hoc (re-)analysis of sweep and calibration data.
 
 All functions in this module are pure analysis — they operate on DataFrames
 and configuration only, with no hardware dependencies.
@@ -6,26 +6,126 @@ and configuration only, with no hardware dependencies.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 from cavityscope.analysis.measurement import add_voltage_columns
-from cavityscope.analysis.plotting import plot_beta_fit, plot_vpi_vs_frequency
+from cavityscope.analysis.plotting import (
+    plot_beta_fit,
+    plot_power_calibration,
+    plot_vpi_vs_frequency,
+)
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
+from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.utils import ensure_dir
 
-if TYPE_CHECKING:
-    from cavityscope.core.calibration import PowerCalibration
 
+# ---------------------------------------------------------------------------
+# Power calibration analysis
+# ---------------------------------------------------------------------------
+
+def build_calibration(
+    cal_df: pd.DataFrame,
+    output_dir: Optional[str | Path] = None,
+    verbose: bool = True,
+) -> PowerCalibration:
+    """Build a :class:`PowerCalibration` from a raw calibration DataFrame.
+
+    Optionally saves the CSV, a summary plot, and prints diagnostics.
+
+    Parameters
+    ----------
+    cal_df : pd.DataFrame
+        Must contain ``frequency_hz``, ``power_dbm``, ``vpk_v``
+        (as produced by :func:`~cavityscope.sweep.run_power_calibration`).
+    output_dir : str or Path, optional
+        If given, saves ``power_calibration.csv`` and
+        ``power_calibration.png`` there.
+    verbose : bool
+        Print summary.
+
+    Returns
+    -------
+    PowerCalibration
+    """
+    calibration = PowerCalibration(cal_df)
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        cal_df.to_csv(out / "power_calibration.csv", index=False)
+        plot_power_calibration(cal_df, out / "power_calibration.png")
+        if verbose:
+            print(f"  Saved: {out / 'power_calibration.csv'}")
+            print(f"  Saved: {out / 'power_calibration.png'}")
+
+    if verbose:
+        print(f"  {calibration}")
+
+    return calibration
+
+
+def load_calibration_run(
+    run_dir: str | Path,
+    verbose: bool = True,
+) -> Dict:
+    """Load a previously saved calibration run from disk.
+
+    Parameters
+    ----------
+    run_dir : str or Path
+        Path to a ``calibration_YYYYMMDD_HHMMSS/`` folder.
+    verbose : bool
+        Print summary.
+
+    Returns
+    -------
+    dict with keys ``"cal_df"``, ``"calibration"``, ``"config"`` (if present)
+
+    Example
+    -------
+    >>> data = load_calibration_run("vpi_sweep_output/calibration_20260319_120000")
+    >>> cal  = data["calibration"]   # PowerCalibration ready to use
+    >>> df   = data["cal_df"]        # raw DataFrame for inspection / replotting
+    """
+    run_dir = Path(run_dir)
+    csv_path = run_dir / "power_calibration.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"No power_calibration.csv in {run_dir}")
+
+    cal_df = pd.read_csv(csv_path)
+    calibration = PowerCalibration(cal_df)
+
+    cfg_dict = None
+    cfg_path = run_dir / "config_used.json"
+    if cfg_path.exists():
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg_dict = json.load(f)
+
+    if verbose:
+        print(f"Loaded calibration from: {run_dir}")
+        print(f"  {calibration}")
+        if cfg_dict:
+            freqs = cfg_dict.get("rf_frequencies_hz", [])
+            powers = cfg_dict.get("rf_powers_dbm", [])
+            print(f"  Grid: {len(freqs)} frequencies x {len(powers)} powers")
+
+    return {"cal_df": cal_df, "calibration": calibration, "config": cfg_dict}
+
+
+# ---------------------------------------------------------------------------
+# Sweep reanalysis
+# ---------------------------------------------------------------------------
 
 def apply_calibration(
     results_df: pd.DataFrame,
     cfg: SweepConfig,
-    calibration: Optional["PowerCalibration"] = None,
+    calibration: Optional[PowerCalibration] = None,
 ) -> pd.DataFrame:
     """Recompute voltage columns on every row using a (new) calibration.
 
@@ -115,7 +215,7 @@ def compute_vpi_fits(
 def reanalyze_with_calibration(
     results_df: pd.DataFrame,
     cfg: SweepConfig,
-    calibration: Optional["PowerCalibration"] = None,
+    calibration: Optional[PowerCalibration] = None,
     output_dir: Optional[str | Path] = None,
     verbose: bool = True,
 ) -> Dict[str, pd.DataFrame]:
@@ -145,8 +245,7 @@ def reanalyze_with_calibration(
     dict with keys ``"results"``, ``"fits"``
     """
     if calibration is None and cfg.power_calibration_csv is not None:
-        from cavityscope.core.calibration import PowerCalibration as _PC
-        calibration = _PC.from_csv(cfg.power_calibration_csv)
+        calibration = PowerCalibration.from_csv(cfg.power_calibration_csv)
 
     df = apply_calibration(results_df, cfg, calibration=calibration)
     fit_df = compute_vpi_fits(df, cfg, output_dir=output_dir)
