@@ -154,16 +154,22 @@ def add_voltage_columns(
     cfg: SweepConfig,
     calibration: Optional["PowerCalibration"] = None,
     rf_frequency_hz: Optional[float] = None,
+    measured_vpk_v: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Append voltage columns — calibrated when available, analytical otherwise.
+    """Append voltage columns.
 
-    When *calibration* is provided the Vpk comes from the interpolated
-    calibration table.  Otherwise the nominal ``dBm → Vrms → Vpk`` conversion
-    is used (subject to ``net_power_offset_db`` and ``assumed_load_ohm``).
+    Priority (highest wins):
+    1. *measured_vpk_v* — live scope measurement on the RF monitor channel.
+    2. *calibration* — interpolated from a calibration table / CSV.
+    3. Analytical dBm → Vrms → Vpk (``net_power_offset_db`` + ``assumed_load_ohm``).
     """
     delivered_dbm = rf_power_dbm + cfg.net_power_offset_db
 
-    if calibration is not None:
+    if measured_vpk_v is not None:
+        vpk = measured_vpk_v
+        vrms = vpk / math.sqrt(2.0)
+        row["voltage_source"] = "live_scope"
+    elif calibration is not None:
         vpk = calibration.vpk(rf_power_dbm, frequency_hz=rf_frequency_hz)
         vrms = vpk / math.sqrt(2.0)
         row["voltage_source"] = "calibration"

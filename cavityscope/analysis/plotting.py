@@ -231,6 +231,63 @@ def plot_beta_fit(
     plt.close(fig)
 
 
+def plot_live_calibration(
+    cal_df: pd.DataFrame,
+    out_png: Path | str,
+) -> None:
+    """Plot the live-scope RF voltage calibration.
+
+    Top panel: measured Vpk vs power setting, one curve per frequency.
+    Bottom panel: measured Vpk vs frequency at the highest power setting.
+    """
+    if cal_df.empty or "measured_vpk_v" not in cal_df.columns:
+        return
+
+    freqs = sorted(cal_df["rf_frequency_hz"].unique())
+    powers = sorted(cal_df["rf_power_dbm"].unique())
+
+    fig, (ax_pwr, ax_freq) = plt.subplots(2, 1, figsize=(9, 8))
+
+    for freq in freqs:
+        sub = cal_df[cal_df["rf_frequency_hz"] == freq].sort_values("rf_power_dbm")
+        ax_pwr.plot(
+            sub["rf_power_dbm"],
+            sub["measured_vpk_v"],
+            "o-",
+            markersize=4,
+            lw=1.2,
+            label=f"{freq/1e9:.2f} GHz",
+        )
+    ax_pwr.set(
+        xlabel="RF power setting (dBm)",
+        ylabel="Measured $V_{pk}$ (V)",
+        title="Live calibration: measured RF voltage vs power setting",
+    )
+    ax_pwr.grid(True, alpha=0.25)
+    ax_pwr.legend(loc="best", fontsize=7, ncol=max(1, len(freqs) // 5))
+
+    max_power = max(powers)
+    at_max = cal_df[cal_df["rf_power_dbm"] == max_power].sort_values("rf_frequency_hz")
+    if not at_max.empty:
+        ax_freq.plot(
+            at_max["rf_frequency_hz"] / 1e9,
+            at_max["measured_vpk_v"],
+            "s-",
+            markersize=6,
+            lw=1.5,
+        )
+        ax_freq.set(
+            xlabel="RF frequency (GHz)",
+            ylabel="Measured $V_{pk}$ (V)",
+            title=f"Measured $V_{{pk}}$ vs frequency at max power ({max_power:.1f} dBm)",
+        )
+        ax_freq.grid(True, alpha=0.25)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=140)
+    plt.close(fig)
+
+
 def plot_vpi_vs_frequency(
     fit_df: pd.DataFrame,
     out_png: Path | str,

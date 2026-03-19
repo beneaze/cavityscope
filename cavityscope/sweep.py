@@ -19,11 +19,13 @@ from cavityscope.analysis.measurement import (
 )
 from cavityscope.analysis.plotting import (
     plot_beta_fit,
+    plot_live_calibration,
     plot_trace_frequency_space,
     plot_trace_with_windows,
     plot_vpi_vs_frequency,
 )
 from cavityscope.analysis.reference import analyze_reference_trace
+from cavityscope.analysis.rf_voltage import extract_vpk_from_trace
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
 from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
@@ -72,10 +74,14 @@ def run_sweep(
     with open(run_dir / "config_used.json", "w", encoding="utf-8") as f:
         json.dump(cfg.to_dict(), f, indent=2)
 
+    use_live_cal = cfg.live_cal_channel is not None
+
     if verbose:
         print("Measurement folder:", run_dir)
         print("Connected scope:", scope.idn())
-        if calibration is not None:
+        if use_live_cal:
+            print(f"Live calibration: reading RF voltage from scope ch{cfg.live_cal_channel}")
+        elif calibration is not None:
             print("Power calibration:", calibration)
 
     rf_source.set_output(False)
@@ -84,6 +90,7 @@ def run_sweep(
     results: List[Dict] = []
     reference_rows: List[Dict] = []
     fit_rows: List[Dict] = []
+    live_cal_rows: List[Dict] = []
 
     for freq_hz in cfg.rf_frequencies_hz:
         freq_hz = float(freq_hz)
@@ -166,6 +173,22 @@ def run_sweep(
             )
             t, y, _ = scope.read_waveform(scope_channel)
 
+            measured_vpk: Optional[float] = None
+            if use_live_cal:
+                t_rf, v_rf, _ = scope.read_waveform(cfg.live_cal_channel)
+                rf_meas = extract_vpk_from_trace(
+                    t_rf, v_rf, rf_frequency_hz=freq_hz,
+                    cycles_for_rms=cfg.live_cal_cycles_for_rms,
+                )
+                measured_vpk = rf_meas["measured_vpk_v"]
+                live_cal_rows.append({
+                    "rf_frequency_hz": freq_hz,
+                    "rf_power_dbm": power_dbm,
+                    **rf_meas,
+                })
+                if verbose:
+                    print(f"    ch{cfg.live_cal_channel} measured Vpk = {measured_vpk:.4f} V")
+
             meas, picked = measure_trace_against_reference(
                 t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg
             )
@@ -179,6 +202,7 @@ def run_sweep(
                 row, power_dbm, cfg,
                 calibration=calibration,
                 rf_frequency_hz=freq_hz,
+                measured_vpk_v=measured_vpk,
             )
             results.append(row)
 
@@ -239,6 +263,11 @@ def run_sweep(
         fit_df = pd.DataFrame(fit_rows)
         plot_vpi_vs_frequency(fit_df, run_dir / "vpi_vs_frequency.png")
 
+    live_cal_df = pd.DataFrame(live_cal_rows)
+    if not live_cal_df.empty:
+        live_cal_df.to_csv(run_dir / "live_calibration.csv", index=False)
+        plot_live_calibration(live_cal_df, run_dir / "live_calibration.png")
+
     df.to_csv(run_dir / "sweep_results.csv", index=False)
     ref_df.to_csv(run_dir / "reference_summary.csv", index=False)
     fit_df.to_csv(run_dir / "vpi_fit_summary.csv", index=False)
@@ -246,4 +275,9 @@ def run_sweep(
     if verbose:
         print("\nSaved to:", run_dir)
 
-    return {"results": df, "references": ref_df, "fits": fit_df}
+    return {
+        "results": df,
+        "references": ref_df,
+        "fits": fit_df,
+        "live_calibration": live_cal_df,
+    }

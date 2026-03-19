@@ -66,6 +66,13 @@ class SweepConfig:
     # When set, calibrated voltages replace the analytical dBm-to-V conversion.
     power_calibration_csv: Optional[str] = None
 
+    # -- Live scope calibration (optional) -------------------------------------
+    # Read the RF signal on a second scope channel (e.g. ch2, high-Z probe on
+    # the cable going into the modulator).  The measured Vpk replaces *all*
+    # other voltage estimates — no interpolation, exact same moment & frequency.
+    live_cal_channel: Optional[int] = None
+    live_cal_cycles_for_rms: int = 20
+
     # -- Output ----------------------------------------------------------------
     output_dir: str = "vpi_sweep_output"
     save_trace_plots: bool = True
