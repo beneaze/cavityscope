@@ -334,6 +334,18 @@ def plot_vpi_vs_frequency(
         vpi_median, ls="--", lw=0.8, color="gray", alpha=0.5,
         label=f"median = {vpi_median:.3f} V",
     )
+
+    idx_min = int(np.nanargmin(vpi[valid]))
+    f_min, v_min = freq_ghz[valid][idx_min], vpi[valid][idx_min]
+    ax_vpi.axvline(f_min, ls=":", lw=0.8, color="tab:red", alpha=0.6)
+    ax_vpi.annotate(
+        f"min $V_\\pi$ = {v_min:.3f} V\n@ {f_min*1e3:.2f} MHz",
+        (f_min, v_min),
+        textcoords="offset points", xytext=(12, -18),
+        fontsize=8, color="tab:red", fontweight="bold",
+        arrowprops=dict(arrowstyle="->", color="tab:red", lw=1.2),
+    )
+
     ax_vpi.set_ylabel("$V_\\pi$ (V)")
     ax_vpi.set_title("$V_\\pi$ vs RF frequency")
     ax_vpi.grid(True, alpha=0.25)
