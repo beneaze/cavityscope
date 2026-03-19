@@ -9,6 +9,7 @@ from cavityscope.analysis.plotting import (
     plot_trace_with_windows,
     plot_trace_frequency_space,
     plot_beta_fit,
+    plot_power_calibration,
     plot_live_calibration,
     plot_vpi_vs_frequency,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "plot_trace_with_windows",
     "plot_trace_frequency_space",
     "plot_beta_fit",
+    "plot_power_calibration",
     "plot_live_calibration",
     "plot_vpi_vs_frequency",
 ]

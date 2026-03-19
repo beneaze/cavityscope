@@ -19,7 +19,7 @@ from cavityscope.analysis.measurement import (
 )
 from cavityscope.analysis.plotting import (
     plot_beta_fit,
-    plot_live_calibration,
+    plot_power_calibration,
     plot_trace_frequency_space,
     plot_trace_with_windows,
     plot_vpi_vs_frequency,
@@ -30,7 +30,120 @@ from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
 from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.instruments import RFSourceInterface, ScopeInterface
-from cavityscope.core.utils import make_measurement_output_dirs
+from cavityscope.core.utils import ensure_dir, make_measurement_output_dirs
+
+
+def run_power_calibration(
+    scope: ScopeInterface,
+    rf_source: RFSourceInterface,
+    cfg: SweepConfig,
+    output_dir: Optional[str] = None,
+    verbose: bool = True,
+) -> PowerCalibration:
+    """Run a separate scope-based power calibration before the main sweep.
+
+    For each (frequency, power) in the sweep grid the scope timebase is set
+    so that ~``cfg.cal_cycles_to_capture`` RF cycles fill the screen, then
+    a single acquisition is taken on ``cfg.cal_scope_channel`` and the Vpk
+    is extracted via a sine fit.
+
+    The original scope timebase is restored afterwards.
+
+    Parameters
+    ----------
+    scope : ScopeInterface
+        An already-opened oscilloscope.
+    rf_source : RFSourceInterface
+        An already-opened RF signal generator.
+    cfg : SweepConfig
+        Sweep configuration (uses the same frequency/power grid).
+    output_dir : str, optional
+        Where to save ``power_calibration.csv`` and the plot.
+        Defaults to ``cfg.output_dir``.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    PowerCalibration
+        Ready to pass into :func:`run_sweep` as the *calibration* argument.
+    """
+    if cfg.cal_scope_channel is None:
+        raise ValueError("cfg.cal_scope_channel must be set to run power calibration.")
+
+    cal_ch = cfg.cal_scope_channel
+    n_cycles = cfg.cal_cycles_to_capture
+    out = ensure_dir(output_dir or cfg.output_dir)
+
+    original_timebase = scope.get_timebase()
+    if verbose:
+        print(f"Power calibration: scope ch{cal_ch}, {n_cycles} cycles/acquisition")
+        print(f"  Original timebase: {original_timebase:.3E} s/div")
+
+    rf_source.set_output(False)
+    time.sleep(0.2)
+
+    rows: List[Dict] = []
+
+    try:
+        for freq_hz in cfg.rf_frequencies_hz:
+            freq_hz = float(freq_hz)
+
+            # 10 divs on screen → total window = 10 * scale
+            # We want n_cycles / freq_hz seconds visible
+            desired_window = n_cycles / freq_hz
+            scale = desired_window / 10.0
+            scope.set_timebase(scale)
+            scope.set_trigger_mode("AUTO")
+            time.sleep(0.1)
+
+            if verbose:
+                print(f"\n  f = {freq_hz/1e9:.4f} GHz  (timebase {scale:.3E} s/div)")
+
+            for power_dbm in cfg.rf_powers_dbm:
+                power_dbm = float(power_dbm)
+                rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm, enabled=True)
+                time.sleep(cfg.cal_settle_s)
+
+                scope.acquire_single_and_wait(
+                    timeout_s=cfg.trigger_timeout_s, settle_s=0.02,
+                )
+                t_rf, v_rf, _ = scope.read_waveform(cal_ch)
+
+                meas = extract_vpk_from_trace(
+                    t_rf, v_rf,
+                    rf_frequency_hz=freq_hz,
+                    n_cycles=n_cycles,
+                )
+                rows.append({
+                    "frequency_hz": freq_hz,
+                    "power_dbm": power_dbm,
+                    "vpk_v": meas["measured_vpk_v"],
+                    **{k: v for k, v in meas.items() if k != "measured_vpk_v"},
+                })
+
+                if verbose:
+                    ok = "ok" if meas["fit_converged"] else "FALLBACK"
+                    print(f"    {power_dbm:+7.2f} dBm → Vpk = {meas['measured_vpk_v']:.4f} V  [{ok}]")
+
+        rf_source.set_output(False)
+    finally:
+        scope.set_timebase(original_timebase)
+        if verbose:
+            print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
+
+    cal_df = pd.DataFrame(rows)
+    cal_df.to_csv(out / "power_calibration.csv", index=False)
+    plot_power_calibration(cal_df, out / "power_calibration.png")
+    if verbose:
+        print(f"  Saved: {out / 'power_calibration.csv'}")
+        print(f"  Saved: {out / 'power_calibration.png'}")
+
+    calibration = PowerCalibration(cal_df)
+    if verbose:
+        print(f"  {calibration}")
+
+    return calibration
 
 
 def run_sweep(
@@ -74,14 +187,10 @@ def run_sweep(
     with open(run_dir / "config_used.json", "w", encoding="utf-8") as f:
         json.dump(cfg.to_dict(), f, indent=2)
 
-    use_live_cal = cfg.live_cal_channel is not None
-
     if verbose:
         print("Measurement folder:", run_dir)
         print("Connected scope:", scope.idn())
-        if use_live_cal:
-            print(f"Live calibration: reading RF voltage from scope ch{cfg.live_cal_channel}")
-        elif calibration is not None:
+        if calibration is not None:
             print("Power calibration:", calibration)
 
     rf_source.set_output(False)
@@ -90,7 +199,6 @@ def run_sweep(
     results: List[Dict] = []
     reference_rows: List[Dict] = []
     fit_rows: List[Dict] = []
-    live_cal_rows: List[Dict] = []
 
     for freq_hz in cfg.rf_frequencies_hz:
         freq_hz = float(freq_hz)
@@ -173,22 +281,6 @@ def run_sweep(
             )
             t, y, _ = scope.read_waveform(scope_channel)
 
-            measured_vpk: Optional[float] = None
-            if use_live_cal:
-                t_rf, v_rf, _ = scope.read_waveform(cfg.live_cal_channel)
-                rf_meas = extract_vpk_from_trace(
-                    t_rf, v_rf, rf_frequency_hz=freq_hz,
-                    cycles_for_rms=cfg.live_cal_cycles_for_rms,
-                )
-                measured_vpk = rf_meas["measured_vpk_v"]
-                live_cal_rows.append({
-                    "rf_frequency_hz": freq_hz,
-                    "rf_power_dbm": power_dbm,
-                    **rf_meas,
-                })
-                if verbose:
-                    print(f"    ch{cfg.live_cal_channel} measured Vpk = {measured_vpk:.4f} V")
-
             meas, picked = measure_trace_against_reference(
                 t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg
             )
@@ -202,7 +294,6 @@ def run_sweep(
                 row, power_dbm, cfg,
                 calibration=calibration,
                 rf_frequency_hz=freq_hz,
-                measured_vpk_v=measured_vpk,
             )
             results.append(row)
 
@@ -263,11 +354,6 @@ def run_sweep(
         fit_df = pd.DataFrame(fit_rows)
         plot_vpi_vs_frequency(fit_df, run_dir / "vpi_vs_frequency.png")
 
-    live_cal_df = pd.DataFrame(live_cal_rows)
-    if not live_cal_df.empty:
-        live_cal_df.to_csv(run_dir / "live_calibration.csv", index=False)
-        plot_live_calibration(live_cal_df, run_dir / "live_calibration.png")
-
     df.to_csv(run_dir / "sweep_results.csv", index=False)
     ref_df.to_csv(run_dir / "reference_summary.csv", index=False)
     fit_df.to_csv(run_dir / "vpi_fit_summary.csv", index=False)
@@ -275,9 +361,4 @@ def run_sweep(
     if verbose:
         print("\nSaved to:", run_dir)
 
-    return {
-        "results": df,
-        "references": ref_df,
-        "fits": fit_df,
-        "live_calibration": live_cal_df,
-    }
+    return {"results": df, "references": ref_df, "fits": fit_df}

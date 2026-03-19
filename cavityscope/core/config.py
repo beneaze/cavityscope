@@ -66,12 +66,14 @@ class SweepConfig:
     # When set, calibrated voltages replace the analytical dBm-to-V conversion.
     power_calibration_csv: Optional[str] = None
 
-    # -- Live scope calibration (optional) -------------------------------------
-    # Read the RF signal on a second scope channel (e.g. ch2, high-Z probe on
-    # the cable going into the modulator).  The measured Vpk replaces *all*
-    # other voltage estimates — no interpolation, exact same moment & frequency.
-    live_cal_channel: Optional[int] = None
-    live_cal_cycles_for_rms: int = 20
+    # -- Scope-based power calibration (optional, runs as a separate phase) ----
+    # Channel where the RF output is monitored (high-Z probe before modulator).
+    # Set to None to skip.  When set, run_power_calibration() sweeps the same
+    # frequency/power grid, sets the scope timebase for the RF frequency,
+    # measures Vpk via sine fit, and returns a PowerCalibration object.
+    cal_scope_channel: Optional[int] = None
+    cal_cycles_to_capture: int = 20
+    cal_settle_s: float = 0.15
 
     # -- Output ----------------------------------------------------------------
     output_dir: str = "vpi_sweep_output"
