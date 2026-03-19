@@ -38,6 +38,8 @@ def dbm_to_vrms_into_r(dbm: float, r_ohm: float) -> float:
 
 
 def robust_baseline(y: np.ndarray, percentile: float) -> float:
+    if y.size == 0:
+        return 0.0
     return float(np.percentile(y, percentile))
 
 

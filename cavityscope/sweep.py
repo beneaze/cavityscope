@@ -33,6 +33,28 @@ from cavityscope.core.instruments import RFSourceInterface, ScopeInterface
 from cavityscope.core.utils import ensure_dir, make_measurement_output_dirs
 
 
+def _acquire_with_retry(
+    scope: ScopeInterface,
+    channel: int,
+    timeout_s: float,
+    settle_s: float,
+    max_retries: int = 3,
+    verbose: bool = False,
+):
+    """Acquire a single trace, retrying up to *max_retries* times on empty data."""
+    for attempt in range(1, max_retries + 1):
+        scope.acquire_single_and_wait(timeout_s=timeout_s, settle_s=settle_s)
+        t, y, info = scope.read_waveform(channel)
+        if t.size > 0:
+            return t, y, info
+        if verbose:
+            print(f"    [retry {attempt}/{max_retries}] scope returned empty waveform, re-acquiring...")
+        time.sleep(0.5)
+    raise RuntimeError(
+        f"Scope returned empty waveform after {max_retries} retries on channel {channel}."
+    )
+
+
 def run_power_calibration(
     scope: ScopeInterface,
     rf_source: RFSourceInterface,
@@ -105,10 +127,11 @@ def run_power_calibration(
                 rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm, enabled=True)
                 time.sleep(cfg.cal_settle_s)
 
-                scope.acquire_single_and_wait(
+                t_rf, v_rf, _ = _acquire_with_retry(
+                    scope, cal_ch,
                     timeout_s=cfg.trigger_timeout_s, settle_s=0.02,
+                    max_retries=cfg.scope_read_max_retries, verbose=verbose,
                 )
-                t_rf, v_rf, _ = scope.read_waveform(cal_ch)
 
                 meas = extract_vpk_from_trace(
                     t_rf, v_rf,
@@ -208,11 +231,12 @@ def run_sweep(
         rf_source.apply(freq_hz=freq_hz, enabled=False)
         time.sleep(cfg.settle_after_rf_change_s)
 
-        scope.acquire_single_and_wait(
+        t_ref, y_ref, _ = _acquire_with_retry(
+            scope, scope_channel,
             timeout_s=cfg.trigger_timeout_s,
             settle_s=cfg.settle_after_scope_single_s,
+            max_retries=cfg.scope_read_max_retries, verbose=verbose,
         )
-        t_ref, y_ref, _ = scope.read_waveform(scope_channel)
         ref = analyze_reference_trace(t_ref, y_ref, freq_hz, cfg)
 
         reference_rows.append(
@@ -244,7 +268,7 @@ def run_sweep(
                 ref,
                 rf_frequency_hz=freq_hz,
                 title=f"Reference trace, RF off, f_RF={freq_hz/1e9:.6f} GHz",
-                out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.0f}MHz.png",
+                out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.png",
                 cfg=cfg,
                 picked_points=ref_picked,
             )
@@ -256,14 +280,14 @@ def run_sweep(
                 ref,
                 rf_frequency_hz=freq_hz,
                 title=f"Reference (freq. space), RF off, f_RF={freq_hz/1e9:.6f} GHz",
-                out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.0f}MHz.png",
+                out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.4f}MHz.png",
                 cfg=cfg,
                 picked_points=ref_picked,
             )
 
         if cfg.save_raw_traces_csv:
             pd.DataFrame({"t_s": t_ref, "v": y_ref}).to_csv(
-                dirs["raw_dir"] / f"reference_{freq_hz/1e6:.0f}MHz.csv",
+                dirs["raw_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.csv",
                 index=False,
             )
 
@@ -275,11 +299,12 @@ def run_sweep(
             rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm, enabled=True)
             time.sleep(cfg.settle_after_rf_change_s)
 
-            scope.acquire_single_and_wait(
+            t, y, _ = _acquire_with_retry(
+                scope, scope_channel,
                 timeout_s=cfg.trigger_timeout_s,
                 settle_s=cfg.settle_after_scope_single_s,
+                max_retries=cfg.scope_read_max_retries, verbose=verbose,
             )
-            t, y, _ = scope.read_waveform(scope_channel)
 
             meas, picked = measure_trace_against_reference(
                 t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg
@@ -300,7 +325,7 @@ def run_sweep(
             if cfg.save_trace_plots:
                 mode_label = cfg.sideband_mode.lower()
                 trace_label = f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}"
-                trace_stem = f"trace_{freq_hz/1e6:.0f}MHz_{power_dbm:+06.2f}dBm"
+                trace_stem = f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
                 plot_trace_with_windows(
                     t,
                     y,
@@ -317,7 +342,7 @@ def run_sweep(
                     f"Freq. space: f_RF={freq_hz/1e9:.6f} GHz, "
                     f"P_RF={power_dbm:.2f} dBm"
                 )
-                freq_stem = f"freq_{freq_hz/1e6:.0f}MHz_{power_dbm:+06.2f}dBm"
+                freq_stem = f"freq_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
                 plot_trace_frequency_space(
                     t,
                     y,
@@ -332,7 +357,7 @@ def run_sweep(
             if cfg.save_raw_traces_csv:
                 pd.DataFrame({"t_s": t, "v": y}).to_csv(
                     dirs["raw_dir"]
-                    / f"trace_{freq_hz/1e6:.0f}MHz_{power_dbm:+06.2f}dBm.csv",
+                    / f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.csv",
                     index=False,
                 )
 
@@ -347,7 +372,7 @@ def run_sweep(
             plot_beta_fit(
                 dfg,
                 fit_row,
-                dirs["fit_dir"] / f"vpi_fit_{fhz/1e6:.0f}MHz.png",
+                dirs["fit_dir"] / f"vpi_fit_{fhz/1e6:.4f}MHz.png",
                 float(fhz),
                 cfg,
             )

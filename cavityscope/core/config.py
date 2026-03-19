@@ -30,6 +30,7 @@ class SweepConfig:
     settle_after_rf_change_s: float = 0.15
     settle_after_scope_single_s: float = 0.05
     trigger_timeout_s: float = 4.0
+    scope_read_max_retries: int = 3
 
     # -- Cavity / reference extraction -----------------------------------------
     cavity_fsr_hz: float = 1.5e9

@@ -39,6 +39,11 @@ def analyze_reference_trace(
     cfg: SweepConfig,
 ) -> ReferenceInfo:
     """Find cavity resonances in an RF-off trace and select a reference carrier."""
+    if y_v.size == 0:
+        raise RuntimeError(
+            f"Scope returned an empty waveform for the reference trace "
+            f"at {rf_frequency_hz/1e9:.6f} GHz. Check trigger/acquisition settings."
+        )
     baseline, _y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
 
     min_dist_pts = max(
