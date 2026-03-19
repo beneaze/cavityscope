@@ -13,7 +13,7 @@ dependencies = [
     "pandas",
     "matplotlib",
     "scipy",
-    "hardwarelib",
+    "hardwarelib @ git+https://github.com/beneaze/hardwarelib.git",
 ]
 
 [project.optional-dependencies]
