@@ -154,18 +154,22 @@ def run_power_calibration(
                        if k not in ("measured_vpk_v", "power_dbm")},
                 })
 
-                plot_calibration_fit(
-                    t_rf, v_rf,
-                    rf_frequency_hz=freq_hz,
-                    meas=meas,
-                    out_png=fit_plot_dir
-                    / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
-                    n_cycles=n_cycles,
-                )
-
                 if verbose:
                     ok = "ok" if meas["fit_converged"] else "FALLBACK"
                     print(f"    {power_dbm:+7.2f} dBm → Vpk = {meas['measured_vpk_v']:.4f} V  [{ok}]")
+
+                try:
+                    plot_calibration_fit(
+                        t_rf, v_rf,
+                        rf_frequency_hz=freq_hz,
+                        meas=meas,
+                        out_png=fit_plot_dir
+                        / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
+                        n_cycles=n_cycles,
+                    )
+                except Exception as exc:
+                    if verbose:
+                        print(f"    [warning] fit plot failed: {exc}")
 
         rf_source.set_output(False)
     finally:

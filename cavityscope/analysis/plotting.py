@@ -387,6 +387,11 @@ def plot_calibration_fit(
     converged = meas.get("fit_converged", True)
     power_dbm = meas.get("power_dbm", float("nan"))
 
+    if not np.isfinite(phase):
+        phase = 0.0
+    if not np.isfinite(offset):
+        offset = float(np.mean(v_win))
+
     fit_curve = vpk * np.sin(2.0 * np.pi * f_fit * t_win + phase) + offset
     residual = v_win - fit_curve
 
