@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cavityscope"
+version = "0.1.0"
+description = "Scanning Fabry-Perot cavity analysis: Vpi sweeps and sideband extraction"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "scipy",
+    "hardwarelib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "jupyterlab"]
+
+[tool.setuptools.packages.find]
+include = ["cavityscope*"]
