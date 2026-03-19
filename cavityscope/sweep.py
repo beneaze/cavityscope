@@ -17,7 +17,11 @@ from cavityscope.analysis.measurement import (
     add_voltage_columns,
     measure_trace_against_reference,
 )
-from cavityscope.analysis.plotting import plot_beta_fit, plot_trace_with_windows
+from cavityscope.analysis.plotting import (
+    plot_beta_fit,
+    plot_trace_frequency_space,
+    plot_trace_with_windows,
+)
 from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
 from cavityscope.core.config import SweepConfig
@@ -97,6 +101,15 @@ def run_sweep(
             }
         )
 
+        ref_picked = {
+            "carrier_times_s": np.asarray([ref.chosen_carrier_time_s]),
+            "carrier_heights_v": np.asarray([ref.chosen_carrier_height_v]),
+            "sb_minus_times_s": np.asarray([]),
+            "sb_minus_heights_v": np.asarray([]),
+            "sb_plus_times_s": np.asarray([]),
+            "sb_plus_heights_v": np.asarray([]),
+        }
+
         if cfg.save_reference_plots:
             plot_trace_with_windows(
                 t_ref,
@@ -106,14 +119,19 @@ def run_sweep(
                 title=f"Reference trace, RF off, f_RF={freq_hz/1e9:.6f} GHz",
                 out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.0f}MHz.png",
                 cfg=cfg,
-                picked_points={
-                    "carrier_times_s": np.asarray([ref.chosen_carrier_time_s]),
-                    "carrier_heights_v": np.asarray([ref.chosen_carrier_height_v]),
-                    "sb_minus_times_s": np.asarray([]),
-                    "sb_minus_heights_v": np.asarray([]),
-                    "sb_plus_times_s": np.asarray([]),
-                    "sb_plus_heights_v": np.asarray([]),
-                },
+                picked_points=ref_picked,
+            )
+
+        if cfg.save_frequency_plots:
+            plot_trace_frequency_space(
+                t_ref,
+                y_ref,
+                ref,
+                rf_frequency_hz=freq_hz,
+                title=f"Reference (freq. space), RF off, f_RF={freq_hz/1e9:.6f} GHz",
+                out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.0f}MHz.png",
+                cfg=cfg,
+                picked_points=ref_picked,
             )
 
         if cfg.save_raw_traces_csv:
@@ -150,14 +168,32 @@ def run_sweep(
 
             if cfg.save_trace_plots:
                 mode_label = cfg.sideband_mode.lower()
+                trace_label = f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}"
+                trace_stem = f"trace_{freq_hz/1e6:.0f}MHz_{power_dbm:+06.2f}dBm"
                 plot_trace_with_windows(
                     t,
                     y,
                     ref,
                     rf_frequency_hz=freq_hz,
-                    title=f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}",
-                    out_png=dirs["traces_dir"]
-                    / f"trace_{freq_hz/1e6:.0f}MHz_{power_dbm:+06.2f}dBm.png",
+                    title=trace_label,
+                    out_png=dirs["traces_dir"] / f"{trace_stem}.png",
+                    cfg=cfg,
+                    picked_points=picked,
+                )
+
+            if cfg.save_frequency_plots:
+                freq_label = (
+                    f"Freq. space: f_RF={freq_hz/1e9:.6f} GHz, "
+                    f"P_RF={power_dbm:.2f} dBm"
+                )
+                freq_stem = f"freq_{freq_hz/1e6:.0f}MHz_{power_dbm:+06.2f}dBm"
+                plot_trace_frequency_space(
+                    t,
+                    y,
+                    ref,
+                    rf_frequency_hz=freq_hz,
+                    title=freq_label,
+                    out_png=dirs["freq_dir"] / f"{freq_stem}.png",
                     cfg=cfg,
                     picked_points=picked,
                 )

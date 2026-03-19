@@ -65,7 +65,8 @@ class SweepConfig:
     output_dir: str = "vpi_sweep_output"
     save_trace_plots: bool = True
     save_reference_plots: bool = True
-    save_raw_traces_csv: bool = False
+    save_raw_traces_csv: bool = True
+    save_frequency_plots: bool = True
 
     def to_dict(self) -> dict:
         return asdict(self)

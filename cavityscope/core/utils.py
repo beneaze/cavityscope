@@ -25,6 +25,7 @@ def make_measurement_output_dirs(base_output_dir: str | Path) -> Dict[str, Path]
         "refs_dir": ensure_dir(run_dir / "reference_plots"),
         "raw_dir": ensure_dir(run_dir / "raw_traces"),
         "fit_dir": ensure_dir(run_dir / "fit_plots"),
+        "freq_dir": ensure_dir(run_dir / "frequency_plots"),
     }
 
 

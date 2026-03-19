@@ -4,7 +4,11 @@ from cavityscope.analysis.measurement import (
     add_voltage_columns,
 )
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk, solve_beta_from_ratio
-from cavityscope.analysis.plotting import plot_trace_with_windows, plot_beta_fit
+from cavityscope.analysis.plotting import (
+    plot_trace_with_windows,
+    plot_trace_frequency_space,
+    plot_beta_fit,
+)
 
 __all__ = [
     "ReferenceInfo",
@@ -14,5 +18,6 @@ __all__ = [
     "fit_beta_vs_vpk",
     "solve_beta_from_ratio",
     "plot_trace_with_windows",
+    "plot_trace_frequency_space",
     "plot_beta_fit",
 ]
