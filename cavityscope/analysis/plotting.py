@@ -235,13 +235,11 @@ def plot_power_calibration(
     cal_df: pd.DataFrame,
     out_png: Path | str,
 ) -> None:
-    """Plot the scope-based power calibration.
+    """Plot power calibration (works for both scope-based and SA-based data).
 
-    Top panel: measured Vpk vs power setting, one curve per frequency.
-    Bottom panel: measured Vpk vs frequency at the highest power setting.
-
-    Accepts column names from either the calibration CSV
-    (``frequency_hz``, ``power_dbm``, ``vpk_v``) or legacy names.
+    If ``measured_power_dbm`` is present (SA calibration), shows three panels:
+    measured dBm, Vpk vs power setting, and Vpk vs frequency.
+    Otherwise shows two panels (Vpk only).
     """
     if cal_df.empty:
         return
@@ -255,24 +253,50 @@ def plot_power_calibration(
 
     freqs = sorted(cal_df[col_freq].unique())
     powers = sorted(cal_df[col_pwr].unique())
+    has_sa = "measured_power_dbm" in cal_df.columns
+    sa_label = "SA" if has_sa else "Scope"
 
-    fig, (ax_pwr, ax_freq) = plt.subplots(2, 1, figsize=(9, 8))
+    n_panels = 3 if has_sa else 2
+    fig, axes = plt.subplots(n_panels, 1, figsize=(9, 3.5 * n_panels))
+    ax_idx = 0
 
+    if has_sa:
+        ax_dbm = axes[ax_idx]; ax_idx += 1
+        for freq in freqs:
+            sub = cal_df[cal_df[col_freq] == freq].sort_values(col_pwr)
+            ax_dbm.plot(
+                sub[col_pwr], sub["measured_power_dbm"],
+                "o-", markersize=4, lw=1.2,
+                label=f"{freq/1e9:.4f} GHz",
+            )
+        pmin, pmax = min(powers), max(powers)
+        ax_dbm.plot([pmin, pmax], [pmin, pmax], "k--", lw=0.8, alpha=0.35,
+                    label="setting = measured")
+        ax_dbm.set(
+            xlabel="RF power setting (dBm)",
+            ylabel="Measured power (dBm)",
+            title=f"{sa_label} calibration: measured power vs setting",
+        )
+        ax_dbm.grid(True, alpha=0.25)
+        ax_dbm.legend(loc="best", fontsize=7, ncol=max(1, len(freqs) // 5))
+
+    ax_pwr = axes[ax_idx]; ax_idx += 1
     for freq in freqs:
         sub = cal_df[cal_df[col_freq] == freq].sort_values(col_pwr)
         ax_pwr.plot(
             sub[col_pwr], sub[col_vpk],
             "o-", markersize=4, lw=1.2,
-            label=f"{freq/1e9:.2f} GHz",
+            label=f"{freq/1e9:.4f} GHz",
         )
     ax_pwr.set(
         xlabel="RF power setting (dBm)",
-        ylabel="Measured $V_{pk}$ (V)",
-        title="Scope power calibration: Vpk vs power setting",
+        ylabel="$V_{pk}$ at load (V)",
+        title=f"{sa_label} calibration: Vpk vs power setting",
     )
     ax_pwr.grid(True, alpha=0.25)
     ax_pwr.legend(loc="best", fontsize=7, ncol=max(1, len(freqs) // 5))
 
+    ax_freq = axes[ax_idx]
     max_power = max(powers)
     at_max = cal_df[cal_df[col_pwr] == max_power].sort_values(col_freq)
     if not at_max.empty:
@@ -282,8 +306,8 @@ def plot_power_calibration(
         )
         ax_freq.set(
             xlabel="RF frequency (GHz)",
-            ylabel="Measured $V_{pk}$ (V)",
-            title=f"Measured $V_{{pk}}$ vs frequency at max power ({max_power:.1f} dBm)",
+            ylabel="$V_{pk}$ at load (V)",
+            title=f"$V_{{pk}}$ vs frequency at max power ({max_power:.1f} dBm)",
         )
         ax_freq.grid(True, alpha=0.25)
 
@@ -353,6 +377,195 @@ def plot_vpi_vs_frequency(
     ax_r2.grid(True, alpha=0.25)
     ax_r2.legend(loc="best")
 
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=140)
+    plt.close(fig)
+
+
+def plot_sa_spectrum(
+    wideband_freqs: np.ndarray,
+    wideband_amps: np.ndarray,
+    harmonics: list,
+    fundamental_hz: float,
+    power_dbm_setting: float,
+    metrics: dict,
+    out_png: Path | str,
+) -> None:
+    """Plot a single wideband spectrum with fundamental and harmonics labelled.
+
+    Shows the full SA trace, marks each measured harmonic with its power
+    and dBc level, and annotates the THD.
+    """
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+
+    ax.plot(wideband_freqs / 1e9, wideband_amps,
+            color="C0", lw=0.8, alpha=0.85, label="SA trace")
+
+    colours = plt.cm.tab10.colors
+    fund_dbm = metrics.get("fundamental_power_dbm", float("nan"))
+
+    for h in harmonics:
+        k = h["harmonic_number"]
+        f_ghz = h["measured_freq_hz"] / 1e9
+        p_dbm = h["power_dbm"]
+        dbc = p_dbm - fund_dbm if np.isfinite(fund_dbm) else float("nan")
+
+        c = colours[(k - 1) % len(colours)]
+        lbl = f"f (fund.)" if k == 1 else f"{k}f"
+        ax.axvline(f_ghz, ls="--", lw=0.9, color=c, alpha=0.6)
+        ax.plot(f_ghz, p_dbm, "o", ms=8, color=c, zorder=5)
+
+        if k == 1:
+            txt = f"{lbl}\n{p_dbm:+.1f} dBm"
+        else:
+            txt = f"{lbl}\n{p_dbm:+.1f} dBm\n({dbc:+.1f} dBc)"
+        ax.annotate(txt, (f_ghz, p_dbm),
+                    textcoords="offset points", xytext=(6, 8),
+                    fontsize=7, color=c, fontweight="bold",
+                    ha="left", va="bottom")
+
+    thd = metrics.get("thd_percent", float("nan"))
+    frac = metrics.get("fundamental_power_fraction", float("nan"))
+    ax.set_title(
+        f"Spectrum: f₀ = {fundamental_hz/1e9:.4f} GHz, "
+        f"P_set = {power_dbm_setting:+.1f} dBm  —  "
+        f"THD = {thd:.1f}%,  fundamental carries {frac*100:.1f}% of total power",
+        fontsize=9,
+    )
+    ax.set_xlabel("Frequency (GHz)")
+    ax.set_ylabel("Power (dBm)")
+    ax.grid(True, alpha=0.2)
+    ax.legend(loc="upper right", fontsize=7)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=130)
+    plt.close(fig)
+
+
+def plot_harmonic_waterfall(
+    harmonics_df: pd.DataFrame,
+    freq_hz: float,
+    out_png: Path | str,
+) -> None:
+    """Bar chart of harmonic power vs. power setting for one frequency.
+
+    Each cluster of bars represents one power setting; bars within the
+    cluster show the fundamental and each harmonic.
+    """
+    sub = harmonics_df[
+        np.isclose(harmonics_df["frequency_hz"], freq_hz)
+    ].copy()
+    if sub.empty:
+        return
+
+    powers = sorted(sub["power_dbm"].unique())
+    harm_nums = sorted(sub["harmonic_number"].unique())
+    n_harms = len(harm_nums)
+    bar_w = 0.8 / n_harms
+
+    fig, ax = plt.subplots(figsize=(max(8, len(powers) * 0.6), 5))
+    colours = plt.cm.tab10.colors
+
+    for i, k in enumerate(harm_nums):
+        hs = sub[sub["harmonic_number"] == k].set_index("power_dbm")
+        x = np.arange(len(powers))
+        vals = [float(hs.loc[p, "harmonic_power_dbm"]) if p in hs.index else float("nan")
+                for p in powers]
+        lbl = "fundamental" if k == 1 else f"{k}f"
+        ax.bar(x + i * bar_w, vals, width=bar_w,
+               color=colours[(k - 1) % len(colours)], label=lbl, alpha=0.85)
+
+    ax.set_xticks(np.arange(len(powers)) + 0.4)
+    ax.set_xticklabels([f"{p:+.0f}" for p in powers], fontsize=7)
+    ax.set_xlabel("Power setting (dBm)")
+    ax.set_ylabel("Measured power (dBm)")
+    ax.set_title(f"Harmonic content vs. power — f₀ = {freq_hz/1e9:.4f} GHz")
+    ax.legend(fontsize=8)
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=130)
+    plt.close(fig)
+
+
+def plot_thd_summary(
+    thd_df: pd.DataFrame,
+    out_png: Path | str,
+) -> None:
+    """Plot THD vs. power setting, one curve per frequency.
+
+    Top: THD (%).  Bottom: fundamental power fraction.
+    """
+    if thd_df.empty:
+        return
+
+    freqs = sorted(thd_df["frequency_hz"].unique())
+
+    fig, (ax_thd, ax_frac) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+
+    for freq in freqs:
+        s = thd_df[thd_df["frequency_hz"] == freq].sort_values("power_dbm")
+        label = f"{freq/1e9:.4f} GHz"
+        ax_thd.plot(s["power_dbm"], s["thd_percent"],
+                    "o-", ms=4, lw=1.2, label=label)
+        ax_frac.plot(s["power_dbm"], s["fundamental_power_fraction"] * 100,
+                     "o-", ms=4, lw=1.2, label=label)
+
+    ax_thd.set_ylabel("THD (%)")
+    ax_thd.set_title("Total harmonic distortion vs. power setting")
+    ax_thd.grid(True, alpha=0.25)
+    ax_thd.legend(fontsize=7, ncol=max(1, len(freqs) // 5))
+
+    ax_frac.set_xlabel("Power setting (dBm)")
+    ax_frac.set_ylabel("Power in fundamental (%)")
+    ax_frac.set_title("Fraction of total power in the fundamental")
+    ax_frac.grid(True, alpha=0.25)
+    ax_frac.axhline(100, ls=":", lw=0.8, color="gray", alpha=0.4)
+    ax_frac.legend(fontsize=7, ncol=max(1, len(freqs) // 5))
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=140)
+    plt.close(fig)
+
+
+def plot_harmonic_heatmap(
+    harmonics_df: pd.DataFrame,
+    out_png: Path | str,
+) -> None:
+    """Heatmap of dBc levels: (power setting) × (harmonic number).
+
+    Averages across frequencies.  Gives a quick overview of which
+    harmonics dominate and at what power level.
+    """
+    sub = harmonics_df[harmonics_df["harmonic_number"] >= 2].copy()
+    if sub.empty:
+        return
+
+    pivot = sub.pivot_table(
+        index="power_dbm", columns="harmonic_number",
+        values="level_dbc", aggfunc="mean",
+    )
+    if pivot.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(max(6, len(pivot.columns) * 1.2), max(4, len(pivot) * 0.35)))
+    im = ax.imshow(
+        pivot.values, aspect="auto", cmap="RdYlGn",
+        vmin=-80, vmax=0,
+        origin="lower",
+    )
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels([f"{int(k)}f" for k in pivot.columns])
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels([f"{p:+.0f}" for p in pivot.index], fontsize=7)
+    ax.set_xlabel("Harmonic")
+    ax.set_ylabel("Power setting (dBm)")
+    ax.set_title("Harmonic levels (dBc, averaged across frequencies)")
+
+    for (i, j), val in np.ndenumerate(pivot.values):
+        if np.isfinite(val):
+            ax.text(j, i, f"{val:.0f}", ha="center", va="center", fontsize=7,
+                    color="white" if val > -20 else "black")
+
+    fig.colorbar(im, ax=ax, label="dBc", shrink=0.85)
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
     plt.close(fig)

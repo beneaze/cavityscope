@@ -28,8 +28,13 @@ from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.rf_voltage import extract_vpk_from_trace
 from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
-from cavityscope.core.instruments import RFSourceInterface, ScopeInterface
+from cavityscope.core.instruments import (
+    RFSourceInterface,
+    ScopeInterface,
+    SpectrumAnalyzerInterface,
+)
 from cavityscope.core.utils import (
+    dbm_to_vrms_into_r,
     ensure_dir,
     make_calibration_output_dir,
     make_measurement_output_dirs,
@@ -213,6 +218,233 @@ def run_power_calibration(
 
     cal_df = pd.DataFrame(rows)
     calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
+
+    if verbose:
+        print(f"  Calibration folder: {out}")
+
+    return calibration
+
+
+def run_sa_power_calibration(
+    sa: SpectrumAnalyzerInterface,
+    rf_source: RFSourceInterface,
+    cfg: SweepConfig,
+    output_dir: Optional[str] = None,
+    verbose: bool = True,
+) -> PowerCalibration:
+    """Run power calibration using a spectrum analyzer with harmonic analysis.
+
+    For each (frequency, power) in the sweep grid the spectrum analyzer
+    measures the fundamental tone and its harmonics (2f, 3f, …).  The
+    fundamental power is converted to Vpk; the harmonic data is saved
+    alongside the calibration for diagnostics.
+
+    Unlike the scope-based calibration, this approach is immune to
+    harmonics from the signal generator — the SA resolves the fundamental
+    cleanly, and the harmonic analysis quantifies how much distortion is
+    present so you can judge amplifier linearity.
+
+    Parameters
+    ----------
+    sa : SpectrumAnalyzerInterface
+        An already-opened spectrum analyzer.  Must support
+        ``measure_harmonics(...)`` for the full diagnostic, or at
+        minimum ``measure_power_at_frequency(...)`` for the basic
+        fundamental-only path.
+    rf_source : RFSourceInterface
+        An already-opened RF signal generator.
+    cfg : SweepConfig
+        Sweep configuration (uses the same frequency/power grid).
+    output_dir : str, optional
+        Where to save calibration files.  Defaults to ``cfg.output_dir``.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    PowerCalibration
+        Ready to pass into :func:`run_sweep` as the *calibration* argument.
+    """
+    import math
+
+    from cavityscope.analysis.harmonics import (
+        build_harmonics_dataframe,
+        build_thd_dataframe,
+        compute_harmonic_metrics,
+    )
+    from cavityscope.analysis.plotting import (
+        plot_harmonic_heatmap,
+        plot_harmonic_waterfall,
+        plot_sa_spectrum,
+        plot_thd_summary,
+    )
+
+    out = make_calibration_output_dir(output_dir or cfg.output_dir)
+
+    with open(out / "config_used.json", "w", encoding="utf-8") as f:
+        json.dump(cfg.to_dict(), f, indent=2)
+
+    has_harmonics = hasattr(sa, "measure_harmonics")
+    n_harmonics = cfg.cal_sa_n_harmonics if has_harmonics else 0
+
+    if verbose:
+        sa_id = sa.idn() if hasattr(sa, "idn") else "unknown"
+        print(f"SA power calibration: {sa_id}")
+        print(f"  Span: {cfg.cal_sa_span_hz/1e3:.0f} kHz, "
+              f"RBW: {cfg.cal_sa_rbw_hz or 'auto'}, "
+              f"Ref level: {cfg.cal_sa_ref_level_dbm} dBm")
+        if n_harmonics > 1:
+            print(f"  Harmonic analysis: up to {n_harmonics} harmonics")
+
+    rf_source.set_output(False)
+    time.sleep(0.2)
+
+    rows: List[Dict] = []
+    harmonic_measurements: List[Dict] = []
+    spectrum_dir = ensure_dir(out / "spectra") if cfg.cal_sa_save_spectra else None
+
+    try:
+        for freq_hz in cfg.rf_frequencies_hz:
+            freq_hz = float(freq_hz)
+
+            rf_source.set_output(False)
+            time.sleep(0.1)
+
+            if verbose:
+                print(f"\n  f = {freq_hz/1e9:.4f} GHz")
+
+            rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
+                            enabled=True)
+            time.sleep(cfg.cal_sa_settle_s)
+
+            for power_dbm in cfg.rf_powers_dbm:
+                power_dbm = float(power_dbm)
+                rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
+                time.sleep(cfg.cal_sa_settle_s)
+
+                if has_harmonics and n_harmonics >= 2:
+                    hdata = sa.measure_harmonics(
+                        fundamental_hz=freq_hz,
+                        n_harmonics=n_harmonics,
+                        per_tone_span_hz=cfg.cal_sa_span_hz,
+                        rbw_hz=cfg.cal_sa_rbw_hz,
+                        ref_level_dbm=cfg.cal_sa_ref_level_dbm,
+                        settle_s=0.0,
+                    )
+                    harmonics_list = hdata["harmonics"]
+                    wb_freqs, wb_amps = hdata["wideband_trace"]
+
+                    fund = next(h for h in harmonics_list if h["harmonic_number"] == 1)
+                    measured_dbm = fund["power_dbm"]
+                    measured_freq_hz = fund["measured_freq_hz"]
+
+                    metrics = compute_harmonic_metrics(harmonics_list)
+
+                    harmonic_measurements.append({
+                        "frequency_hz": freq_hz,
+                        "power_dbm": power_dbm,
+                        "harmonics": harmonics_list,
+                        "metrics": metrics,
+                        "wideband_trace": (wb_freqs, wb_amps),
+                    })
+
+                    if spectrum_dir is not None:
+                        try:
+                            plot_sa_spectrum(
+                                wb_freqs, wb_amps,
+                                harmonics_list,
+                                fundamental_hz=freq_hz,
+                                power_dbm_setting=power_dbm,
+                                metrics=metrics,
+                                out_png=spectrum_dir
+                                / f"spectrum_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
+                            )
+                        except Exception as exc:
+                            if verbose:
+                                print(f"    [warning] spectrum plot failed: {exc}")
+
+                    if verbose:
+                        thd = metrics["thd_percent"]
+                        frac = metrics["fundamental_power_fraction"]
+                        print(f"    {power_dbm:+7.2f} dBm → "
+                              f"{measured_dbm:+7.2f} dBm (SA) → "
+                              f"THD = {thd:.1f}%, "
+                              f"fund = {frac*100:.1f}% of total")
+                else:
+                    measured_freq_hz, measured_dbm = sa.measure_power_at_frequency(
+                        freq_hz=freq_hz,
+                        span_hz=cfg.cal_sa_span_hz,
+                        rbw_hz=cfg.cal_sa_rbw_hz,
+                        ref_level_dbm=cfg.cal_sa_ref_level_dbm,
+                        settle_s=0.0,
+                    )
+                    if verbose:
+                        print(f"    {power_dbm:+7.2f} dBm → "
+                              f"{measured_dbm:+7.2f} dBm (SA)")
+
+                vrms = dbm_to_vrms_into_r(measured_dbm, cfg.assumed_load_ohm)
+                vpk = vrms * math.sqrt(2.0)
+
+                row = {
+                    "frequency_hz": freq_hz,
+                    "power_dbm": power_dbm,
+                    "vpk_v": vpk,
+                    "measured_power_dbm": measured_dbm,
+                    "measured_frequency_hz": measured_freq_hz,
+                }
+                if harmonic_measurements and harmonic_measurements[-1]["power_dbm"] == power_dbm:
+                    m = harmonic_measurements[-1]["metrics"]
+                    row["thd_percent"] = m["thd_percent"]
+                    row["fundamental_power_fraction"] = m["fundamental_power_fraction"]
+                    for h in harmonic_measurements[-1]["harmonics"]:
+                        k = h["harmonic_number"]
+                        row[f"h{k}_power_dbm"] = h["power_dbm"]
+                        if k >= 2:
+                            row[f"h{k}_dbc"] = h["power_dbm"] - measured_dbm
+
+                rows.append(row)
+
+        rf_source.set_output(False)
+    finally:
+        pass
+
+    cal_df = pd.DataFrame(rows)
+    calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
+
+    if harmonic_measurements:
+        harmonics_df = build_harmonics_dataframe(harmonic_measurements)
+        thd_df = build_thd_dataframe(harmonic_measurements)
+
+        harmonics_df.to_csv(out / "harmonics.csv", index=False)
+        thd_df.to_csv(out / "thd_summary.csv", index=False)
+
+        try:
+            plot_thd_summary(thd_df, out / "thd_summary.png")
+        except Exception as exc:
+            if verbose:
+                print(f"  [warning] THD summary plot failed: {exc}")
+
+        try:
+            plot_harmonic_heatmap(harmonics_df, out / "harmonic_heatmap.png")
+        except Exception as exc:
+            if verbose:
+                print(f"  [warning] harmonic heatmap plot failed: {exc}")
+
+        for freq_hz in cfg.rf_frequencies_hz:
+            try:
+                plot_harmonic_waterfall(
+                    harmonics_df, float(freq_hz),
+                    out / f"harmonic_waterfall_{float(freq_hz)/1e6:.4f}MHz.png",
+                )
+            except Exception as exc:
+                if verbose:
+                    print(f"  [warning] waterfall plot failed for {freq_hz}: {exc}")
+
+        if verbose:
+            max_thd = thd_df["thd_percent"].max()
+            mean_thd = thd_df["thd_percent"].mean()
+            print(f"\n  Harmonic analysis: mean THD = {mean_thd:.1f}%, max THD = {max_thd:.1f}%")
+            print(f"  Saved: harmonics.csv, thd_summary.csv, plots")
 
     if verbose:
         print(f"  Calibration folder: {out}")

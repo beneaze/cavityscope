@@ -77,6 +77,18 @@ class SweepConfig:
     cal_timebase_s_per_div: Optional[float] = None
     cal_settle_s: float = 0.15
 
+    # -- Spectrum-analyzer-based power calibration (preferred) -----------------
+    # When True, run_sa_power_calibration() uses a spectrum analyzer to measure
+    # the fundamental tone power in dBm, then converts to Vpk.  This is immune
+    # to harmonics that break the scope-based sine fit.
+    cal_use_spectrum_analyzer: bool = False
+    cal_sa_span_hz: float = 1e6
+    cal_sa_rbw_hz: Optional[float] = None
+    cal_sa_ref_level_dbm: float = 10.0
+    cal_sa_settle_s: float = 0.15
+    cal_sa_n_harmonics: int = 5
+    cal_sa_save_spectra: bool = True
+
     # -- Output ----------------------------------------------------------------
     output_dir: str = "vpi_sweep_output"
     save_trace_plots: bool = True
