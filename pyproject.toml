@@ -7,7 +7,7 @@ name = "cavityscope"
 version = "0.1.0"
 description = "Scanning Fabry-Perot cavity analysis: Vpi sweeps and sideband extraction"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 dependencies = [
     "numpy",
     "pandas",
