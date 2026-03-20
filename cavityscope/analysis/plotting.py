@@ -231,6 +231,25 @@ def plot_beta_fit(
     plt.close(fig)
 
 
+def _add_line_labels(ax: plt.Axes, lines, labels, fontsize: float = 7) -> None:
+    """Place labels at the right end of each line, outside the plot area."""
+    for line, label in zip(lines, labels):
+        xdata, ydata = line.get_xdata(), line.get_ydata()
+        if len(xdata) == 0:
+            continue
+        ax.annotate(
+            label,
+            xy=(xdata[-1], ydata[-1]),
+            xytext=(5, 0),
+            textcoords="offset points",
+            fontsize=fontsize,
+            color=line.get_color(),
+            va="center",
+            ha="left",
+            clip_on=False,
+        )
+
+
 def plot_power_calibration(
     cal_df: pd.DataFrame,
     out_png: Path | str,
@@ -240,6 +259,9 @@ def plot_power_calibration(
     If ``measured_power_dbm`` is present (SA calibration), shows three panels:
     measured dBm, Vpk vs power setting, and Vpk vs frequency.
     Otherwise shows two panels (Vpk only).
+
+    Frequency labels are placed next to each line on the right side of the
+    plot instead of inside a legend, keeping the plot area clean.
     """
     if cal_df.empty:
         return
@@ -255,46 +277,50 @@ def plot_power_calibration(
     powers = sorted(cal_df[col_pwr].unique())
     has_sa = "measured_power_dbm" in cal_df.columns
     sa_label = "SA" if has_sa else "Scope"
+    freq_labels = [f"{f/1e9:.4f}" for f in freqs]
 
     n_panels = 3 if has_sa else 2
-    fig, axes = plt.subplots(n_panels, 1, figsize=(9, 3.5 * n_panels))
+    fig, axes = plt.subplots(n_panels, 1, figsize=(10, 3.8 * n_panels))
     ax_idx = 0
 
     if has_sa:
         ax_dbm = axes[ax_idx]; ax_idx += 1
+        lines = []
         for freq in freqs:
             sub = cal_df[cal_df[col_freq] == freq].sort_values(col_pwr)
-            ax_dbm.plot(
+            ln, = ax_dbm.plot(
                 sub[col_pwr], sub["measured_power_dbm"],
-                "o-", markersize=4, lw=1.2,
-                label=f"{freq/1e9:.4f} GHz",
+                "o-", markersize=3, lw=1.0,
             )
+            lines.append(ln)
         pmin, pmax = min(powers), max(powers)
-        ax_dbm.plot([pmin, pmax], [pmin, pmax], "k--", lw=0.8, alpha=0.35,
-                    label="setting = measured")
-        ax_dbm.set(
-            xlabel="RF power setting (dBm)",
-            ylabel="Measured power (dBm)",
-            title=f"{sa_label} calibration: measured power vs setting",
-        )
+        ax_dbm.plot([pmin, pmax], [pmin, pmax], "k--", lw=0.8, alpha=0.35)
+        ax_dbm.set_xlabel("RF power setting (dBm)", fontsize=8)
+        ax_dbm.set_ylabel("Measured power (dBm)", fontsize=8)
+        ax_dbm.set_title(f"{sa_label} calibration — measured power vs setting", fontsize=9)
         ax_dbm.grid(True, alpha=0.25)
-        ax_dbm.legend(loc="best", fontsize=7, ncol=max(1, len(freqs) // 5))
+        _add_line_labels(ax_dbm, lines, freq_labels)
+        ax_dbm.margins(x=0.02)
+        extra_right = 0.06 + 0.008 * max(len(s) for s in freq_labels)
+        ax_dbm.set_xlim(right=pmax + (pmax - pmin) * extra_right)
 
     ax_pwr = axes[ax_idx]; ax_idx += 1
+    lines = []
     for freq in freqs:
         sub = cal_df[cal_df[col_freq] == freq].sort_values(col_pwr)
-        ax_pwr.plot(
+        ln, = ax_pwr.plot(
             sub[col_pwr], sub[col_vpk],
-            "o-", markersize=4, lw=1.2,
-            label=f"{freq/1e9:.4f} GHz",
+            "o-", markersize=3, lw=1.0,
         )
-    ax_pwr.set(
-        xlabel="RF power setting (dBm)",
-        ylabel="$V_{pk}$ at load (V)",
-        title=f"{sa_label} calibration: Vpk vs power setting",
-    )
+        lines.append(ln)
+    ax_pwr.set_xlabel("RF power setting (dBm)", fontsize=8)
+    ax_pwr.set_ylabel("$V_{pk}$ at load (V)", fontsize=8)
+    ax_pwr.set_title(f"{sa_label} calibration — $V_{{pk}}$ vs power setting", fontsize=9)
     ax_pwr.grid(True, alpha=0.25)
-    ax_pwr.legend(loc="best", fontsize=7, ncol=max(1, len(freqs) // 5))
+    _add_line_labels(ax_pwr, lines, freq_labels)
+    pmin, pmax = min(powers), max(powers)
+    extra_right = 0.06 + 0.008 * max(len(s) for s in freq_labels)
+    ax_pwr.set_xlim(right=pmax + (pmax - pmin) * extra_right)
 
     ax_freq = axes[ax_idx]
     max_power = max(powers)
@@ -302,12 +328,13 @@ def plot_power_calibration(
     if not at_max.empty:
         ax_freq.plot(
             at_max[col_freq] / 1e9, at_max[col_vpk],
-            "s-", markersize=6, lw=1.5,
+            "s-", markersize=6, lw=1.5, color="C0",
         )
-        ax_freq.set(
-            xlabel="RF frequency (GHz)",
-            ylabel="$V_{pk}$ at load (V)",
-            title=f"$V_{{pk}}$ vs frequency at max power ({max_power:.1f} dBm)",
+        ax_freq.set_xlabel("RF frequency (GHz)", fontsize=8)
+        ax_freq.set_ylabel("$V_{pk}$ at load (V)", fontsize=8)
+        ax_freq.set_title(
+            f"$V_{{pk}}$ vs frequency at max power ({max_power:.1f} dBm)",
+            fontsize=9,
         )
         ax_freq.grid(True, alpha=0.25)
 
