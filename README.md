@@ -83,14 +83,19 @@ resolve those sidebands and give us $\beta$ as a function of applied
 voltage — from which $V_\pi$ drops out as a simple linear-fit parameter.
 
 ```mermaid
+---
+config:
+  themeVariables:
+    fontSize: 12px
+---
 flowchart TD
-    A["1 — Acquire reference trace\n(RF off)"] --> B["2 — Locate cavity peaks,\nmeasure FSR in time"]
-    B --> C["3 — Turn RF on,\nacquire modulated trace"]
-    C --> D["4 — Integrate carrier\nand sideband areas"]
-    D --> E["5 — Compute ratio\nR = A_sb / A_carrier"]
-    E --> F["6 — Invert Bessel relation\nR = J₁(β)² / J₀(β)²  →  β"]
-    F --> G["7 — Repeat for each\nRF power level"]
-    G --> H["8 — Linear fit\nβ vs V_pk  →  V_π = π / slope"]
+    A["1 — Acquire reference trace (RF off)"] --> B["2 — Locate cavity peaks, measure FSR"]
+    B --> C["3 — Turn RF on, acquire modulated trace"]
+    C --> D["4 — Integrate carrier and sideband areas"]
+    D --> E["5 — Compute ratio R = A_sb / A_carrier"]
+    E --> F["6 — Invert Bessel relation → β"]
+    F --> G["7 — Repeat for each RF power level"]
+    G --> H["8 — Linear fit β vs V_pk → V_π = π / slope"]
 
     style A fill:#48a,color:#fff
     style H fill:#484,color:#fff
