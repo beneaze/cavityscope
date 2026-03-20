@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from cavityscope.analysis.measurement import (
     add_voltage_columns,
@@ -131,13 +132,15 @@ def run_power_calibration(
     manual_timebase = cfg.cal_timebase_s_per_div
     min_visible_cycles = max(n_cycles, 5)
 
+    n_total = len(cfg.rf_frequencies_hz) * len(cfg.rf_powers_dbm)
+    pbar = tqdm(total=n_total, desc="Scope cal", unit="pt",
+                disable=not verbose, leave=True)
+
     try:
         for freq_hz in cfg.rf_frequencies_hz:
             freq_hz = float(freq_hz)
             rf_period = 1.0 / freq_hz
 
-            # Turn RF off while we reconfigure the scope timebase so
-            # the scope never sees a turn-on transient.
             rf_source.set_output(False)
 
             if manual_timebase is not None:
@@ -154,21 +157,21 @@ def run_power_calibration(
 
             if verbose:
                 mode = "manual" if manual_timebase is not None else "auto"
-                print(
+                pbar.write(
                     f"\n  f = {freq_hz/1e9:.4f} GHz  "
                     f"({mode}: {actual_scale:.3E} s/div, "
                     f"~{actual_cycles:.0f} cycles visible)"
                 )
 
-            # Enable RF output once per frequency; subsequent power
-            # changes only adjust amplitude without re-toggling enable,
-            # avoiding turn-on transients that can false-trigger the scope.
             rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
                             enabled=True)
             time.sleep(cfg.cal_settle_s)
 
             for power_dbm in cfg.rf_powers_dbm:
                 power_dbm = float(power_dbm)
+                pbar.set_postfix_str(
+                    f"{freq_hz/1e9:.4f} GHz, {power_dbm:+.1f} dBm"
+                )
                 rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
                 time.sleep(cfg.cal_settle_s)
 
@@ -195,7 +198,7 @@ def run_power_calibration(
 
                 if verbose:
                     ok = "ok" if meas["fit_converged"] else "FALLBACK"
-                    print(f"    {power_dbm:+7.2f} dBm → Vpk = {meas['measured_vpk_v']:.4f} V  [{ok}]")
+                    pbar.write(f"    {power_dbm:+7.2f} dBm → Vpk = {meas['measured_vpk_v']:.4f} V  [{ok}]")
 
                 try:
                     plot_calibration_fit(
@@ -208,10 +211,13 @@ def run_power_calibration(
                     )
                 except Exception as exc:
                     if verbose:
-                        print(f"    [warning] fit plot failed: {exc}")
+                        pbar.write(f"    [warning] fit plot failed: {exc}")
+
+                pbar.update(1)
 
         rf_source.set_output(False)
     finally:
+        pbar.close()
         scope.set_timebase(original_timebase)
         if verbose:
             print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
@@ -306,6 +312,10 @@ def run_sa_power_calibration(
     harmonic_measurements: List[Dict] = []
     spectrum_dir = ensure_dir(out / "spectra") if cfg.cal_sa_save_spectra else None
 
+    n_total = len(cfg.rf_frequencies_hz) * len(cfg.rf_powers_dbm)
+    pbar = tqdm(total=n_total, desc="SA cal", unit="pt",
+                disable=not verbose, leave=True)
+
     try:
         for freq_hz in cfg.rf_frequencies_hz:
             freq_hz = float(freq_hz)
@@ -314,7 +324,7 @@ def run_sa_power_calibration(
             time.sleep(0.1)
 
             if verbose:
-                print(f"\n  f = {freq_hz/1e9:.4f} GHz")
+                pbar.write(f"\n  f = {freq_hz/1e9:.4f} GHz")
 
             rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
                             enabled=True)
@@ -322,6 +332,9 @@ def run_sa_power_calibration(
 
             for power_dbm in cfg.rf_powers_dbm:
                 power_dbm = float(power_dbm)
+                pbar.set_postfix_str(
+                    f"{freq_hz/1e9:.4f} GHz, {power_dbm:+.1f} dBm"
+                )
                 rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
                 time.sleep(cfg.cal_sa_settle_s)
 
@@ -365,13 +378,13 @@ def run_sa_power_calibration(
                             )
                         except Exception as exc:
                             if verbose:
-                                print(f"    [warning] spectrum plot failed: {exc}")
+                                pbar.write(f"    [warning] spectrum plot failed: {exc}")
 
                     if verbose:
                         thd = metrics["thd_percent"]
                         frac = metrics["fundamental_power_fraction"]
                         corrected = measured_dbm + cfg.cal_sa_power_offset_db
-                        print(f"    {power_dbm:+7.2f} dBm → "
+                        pbar.write(f"    {power_dbm:+7.2f} dBm → "
                               f"{measured_dbm:+7.2f} dBm (SA raw)"
                               + (f" → {corrected:+7.2f} dBm (corrected)"
                                  if cfg.cal_sa_power_offset_db != 0.0 else "")
@@ -387,7 +400,7 @@ def run_sa_power_calibration(
                     )
                     if verbose:
                         corrected = measured_dbm + cfg.cal_sa_power_offset_db
-                        print(f"    {power_dbm:+7.2f} dBm → "
+                        pbar.write(f"    {power_dbm:+7.2f} dBm → "
                               f"{measured_dbm:+7.2f} dBm (SA raw)"
                               + (f" → {corrected:+7.2f} dBm (corrected)"
                                  if cfg.cal_sa_power_offset_db != 0.0 else ""))
@@ -414,10 +427,11 @@ def run_sa_power_calibration(
                             row[f"h{k}_dbc"] = h["power_dbm"] - measured_dbm
 
                 rows.append(row)
+                pbar.update(1)
 
         rf_source.set_output(False)
     finally:
-        pass
+        pbar.close()
 
     cal_df = pd.DataFrame(rows)
     calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
@@ -516,11 +530,18 @@ def run_sweep(
     results: List[Dict] = []
     reference_rows: List[Dict] = []
 
+    n_freqs = len(cfg.rf_frequencies_hz)
+    n_powers = len(cfg.rf_powers_dbm)
+    n_total = n_freqs * (1 + n_powers)  # 1 reference + n_powers per frequency
+    pbar = tqdm(total=n_total, desc="Vpi sweep", unit="pt",
+                disable=not verbose, leave=True)
+
     for freq_hz in cfg.rf_frequencies_hz:
         freq_hz = float(freq_hz)
         if verbose:
-            print(f"\n=== RF frequency: {freq_hz/1e9:.6f} GHz ===")
+            pbar.write(f"\n=== RF frequency: {freq_hz/1e9:.6f} GHz ===")
 
+        pbar.set_postfix_str(f"{freq_hz/1e9:.4f} GHz, ref")
         rf_source.apply(freq_hz=freq_hz, enabled=False)
         time.sleep(cfg.settle_after_rf_change_s)
 
@@ -584,16 +605,19 @@ def run_sweep(
                 index=False,
             )
 
-        # Enable RF once before the power sweep; subsequent power
-        # changes only adjust amplitude, avoiding turn-on transients.
+        pbar.update(1)
+
         rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
                         enabled=True)
         time.sleep(cfg.settle_after_rf_change_s)
 
         for power_dbm in cfg.rf_powers_dbm:
             power_dbm = float(power_dbm)
+            pbar.set_postfix_str(
+                f"{freq_hz/1e9:.4f} GHz, {power_dbm:+.1f} dBm"
+            )
             if verbose:
-                print(f"  power = {power_dbm:7.3f} dBm")
+                pbar.write(f"  power = {power_dbm:7.3f} dBm")
 
             rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
             time.sleep(cfg.settle_after_rf_change_s)
@@ -659,6 +683,10 @@ def run_sweep(
                     / f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.csv",
                     index=False,
                 )
+
+            pbar.update(1)
+
+    pbar.close()
 
     df = pd.DataFrame(results)
     ref_df = pd.DataFrame(reference_rows)
