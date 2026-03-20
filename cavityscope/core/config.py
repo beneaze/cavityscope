@@ -88,6 +88,7 @@ class SweepConfig:
     cal_sa_settle_s: float = 0.15
     cal_sa_n_harmonics: int = 5
     cal_sa_save_spectra: bool = True
+    cal_sa_power_offset_db: float = 0.0  # added to raw SA reading before dBm→Vpk (e.g. +30 for a 30 dB attenuator before the SA)
 
     # -- Output ----------------------------------------------------------------
     output_dir: str = "vpi_sweep_output"

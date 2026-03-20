@@ -390,15 +390,24 @@ def plot_sa_spectrum(
     power_dbm_setting: float,
     metrics: dict,
     out_png: Path | str,
+    power_offset_db: float = 0.0,
 ) -> None:
     """Plot a single wideband spectrum with fundamental and harmonics labelled.
 
     Shows the full SA trace, marks each measured harmonic with its power
     and dBc level, and annotates the THD.
+
+    Parameters
+    ----------
+    power_offset_db : float
+        Offset added to raw SA readings for display (e.g. +30 for a 30 dB
+        external attenuator).  The trace and markers are shifted together
+        so relative metrics (dBc, THD) are unaffected.
     """
     fig, ax = plt.subplots(figsize=(11, 4.5))
 
-    ax.plot(wideband_freqs / 1e9, wideband_amps,
+    display_amps = wideband_amps + power_offset_db
+    ax.plot(wideband_freqs / 1e9, display_amps,
             color="C0", lw=0.8, alpha=0.85, label="SA trace")
 
     colours = plt.cm.tab10.colors
@@ -407,11 +416,11 @@ def plot_sa_spectrum(
     for h in harmonics:
         k = h["harmonic_number"]
         f_ghz = h["measured_freq_hz"] / 1e9
-        p_dbm = h["power_dbm"]
-        dbc = p_dbm - fund_dbm if np.isfinite(fund_dbm) else float("nan")
+        p_dbm = h["power_dbm"] + power_offset_db
+        dbc = h["power_dbm"] - fund_dbm if np.isfinite(fund_dbm) else float("nan")
 
         c = colours[(k - 1) % len(colours)]
-        lbl = f"f (fund.)" if k == 1 else f"{k}f"
+        lbl = "f (fund.)" if k == 1 else f"{k}f"
         ax.axvline(f_ghz, ls="--", lw=0.9, color=c, alpha=0.6)
         ax.plot(f_ghz, p_dbm, "o", ms=8, color=c, zorder=5)
 
@@ -426,14 +435,16 @@ def plot_sa_spectrum(
 
     thd = metrics.get("thd_percent", float("nan"))
     frac = metrics.get("fundamental_power_fraction", float("nan"))
+    offset_note = f"  [offset {power_offset_db:+.0f} dB]" if power_offset_db != 0 else ""
     ax.set_title(
         f"Spectrum: f₀ = {fundamental_hz/1e9:.4f} GHz, "
         f"P_set = {power_dbm_setting:+.1f} dBm  —  "
-        f"THD = {thd:.1f}%,  fundamental carries {frac*100:.1f}% of total power",
+        f"THD = {thd:.1f}%,  fundamental carries {frac*100:.1f}% of total power"
+        + offset_note,
         fontsize=9,
     )
     ax.set_xlabel("Frequency (GHz)")
-    ax.set_ylabel("Power (dBm)")
+    ax.set_ylabel("Power (dBm)" + (f" [+{power_offset_db:.0f} dB offset]" if power_offset_db != 0 else ""))
     ax.grid(True, alpha=0.2)
     ax.legend(loc="upper right", fontsize=7)
     fig.tight_layout()

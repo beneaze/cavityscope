@@ -293,6 +293,9 @@ def run_sa_power_calibration(
         print(f"  Span: {cfg.cal_sa_span_hz/1e3:.0f} kHz, "
               f"RBW: {cfg.cal_sa_rbw_hz or 'auto'}, "
               f"Ref level: {cfg.cal_sa_ref_level_dbm} dBm")
+        if cfg.cal_sa_power_offset_db != 0.0:
+            print(f"  Power offset: {cfg.cal_sa_power_offset_db:+.1f} dB "
+                  f"(added to raw SA reading before dBm→Vpk)")
         if n_harmonics > 1:
             print(f"  Harmonic analysis: up to {n_harmonics} harmonics")
 
@@ -329,7 +332,7 @@ def run_sa_power_calibration(
                         per_tone_span_hz=cfg.cal_sa_span_hz,
                         rbw_hz=cfg.cal_sa_rbw_hz,
                         ref_level_dbm=cfg.cal_sa_ref_level_dbm,
-                        settle_s=0.0,
+                        settle_s=cfg.cal_sa_settle_s,
                     )
                     harmonics_list = hdata["harmonics"]
                     wb_freqs, wb_amps = hdata["wideband_trace"]
@@ -356,6 +359,7 @@ def run_sa_power_calibration(
                                 fundamental_hz=freq_hz,
                                 power_dbm_setting=power_dbm,
                                 metrics=metrics,
+                                power_offset_db=cfg.cal_sa_power_offset_db,
                                 out_png=spectrum_dir
                                 / f"spectrum_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
                             )
@@ -366,9 +370,12 @@ def run_sa_power_calibration(
                     if verbose:
                         thd = metrics["thd_percent"]
                         frac = metrics["fundamental_power_fraction"]
+                        corrected = measured_dbm + cfg.cal_sa_power_offset_db
                         print(f"    {power_dbm:+7.2f} dBm → "
-                              f"{measured_dbm:+7.2f} dBm (SA) → "
-                              f"THD = {thd:.1f}%, "
+                              f"{measured_dbm:+7.2f} dBm (SA raw)"
+                              + (f" → {corrected:+7.2f} dBm (corrected)"
+                                 if cfg.cal_sa_power_offset_db != 0.0 else "")
+                              + f" → THD = {thd:.1f}%, "
                               f"fund = {frac*100:.1f}% of total")
                 else:
                     measured_freq_hz, measured_dbm = sa.measure_power_at_frequency(
@@ -376,13 +383,17 @@ def run_sa_power_calibration(
                         span_hz=cfg.cal_sa_span_hz,
                         rbw_hz=cfg.cal_sa_rbw_hz,
                         ref_level_dbm=cfg.cal_sa_ref_level_dbm,
-                        settle_s=0.0,
+                        settle_s=cfg.cal_sa_settle_s,
                     )
                     if verbose:
+                        corrected = measured_dbm + cfg.cal_sa_power_offset_db
                         print(f"    {power_dbm:+7.2f} dBm → "
-                              f"{measured_dbm:+7.2f} dBm (SA)")
+                              f"{measured_dbm:+7.2f} dBm (SA raw)"
+                              + (f" → {corrected:+7.2f} dBm (corrected)"
+                                 if cfg.cal_sa_power_offset_db != 0.0 else ""))
 
-                vrms = dbm_to_vrms_into_r(measured_dbm, cfg.assumed_load_ohm)
+                corrected_dbm = measured_dbm + cfg.cal_sa_power_offset_db
+                vrms = dbm_to_vrms_into_r(corrected_dbm, cfg.assumed_load_ohm)
                 vpk = vrms * math.sqrt(2.0)
 
                 row = {
