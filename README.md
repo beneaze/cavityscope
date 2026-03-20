@@ -21,6 +21,77 @@ notebooks/
 └── rf_vpi_sweep.ipynb      # Ready-to-run notebook — just plug in your hardware
 ```
 
+## Measurement setup
+
+The measurement uses a scanning Fabry–Pérot (FP) cavity to resolve the
+optical sidebands created by an electro-optic modulator (EOM) driven with
+an RF signal generator. An optional spectrum analyzer (SA) can be
+inserted into the RF path for power calibration.
+
+```mermaid
+flowchart LR
+    Laser["🔴 Laser"]
+    EOM["EOM\n(phase modulator)"]
+    FP["Scanning\nFabry–Pérot\nCavity"]
+    PD["Photo-\ndetector"]
+    Scope["Oscilloscope\n(CH 1)"]
+    RF["RF Signal\nGenerator"]
+    Amp["RF\nAmplifier\n(optional)"]
+    SA["Spectrum\nAnalyzer\n(optional)"]
+
+    Laser -- "free-space / fiber" --> EOM
+    EOM -- "modulated beam" --> FP
+    FP -- "transmission" --> PD
+    PD -- "voltage" --> Scope
+
+    RF -- "RF out" --> Amp
+    Amp -- "amplified RF" --> EOM
+
+    Amp -. "coupler / tap\n(calibration only)" .-> SA
+
+    style Laser fill:#d44,color:#fff,stroke:#a00
+    style EOM fill:#48a,color:#fff,stroke:#269
+    style FP fill:#48a,color:#fff,stroke:#269
+    style PD fill:#48a,color:#fff,stroke:#269
+    style Scope fill:#484,color:#fff,stroke:#262
+    style RF fill:#a84,color:#fff,stroke:#862
+    style Amp fill:#a84,color:#fff,stroke:#862
+    style SA fill:#a84,color:#fff,stroke:#862
+```
+
+| Instrument | Role | Protocol class | Example driver |
+|---|---|---|---|
+| Oscilloscope | Records cavity transmission trace (time domain) | `ScopeInterface` | `RigolDHO4000` |
+| RF signal generator | Drives the EOM at swept frequency and power | `RFSourceInterface` | `WindfreakSynthHD` |
+| Spectrum analyzer | Measures actual RF power at the fundamental (calibration) | `SpectrumAnalyzerInterface` | `RigolRSA3000E` |
+
+All instrument access goes through the protocol classes in `core/instruments.py`.
+Concrete drivers live in the separate [`hardwarelib`](../hardwarelib) package and
+are wired in at notebook level.
+
+## Working principle — Vpi measurement
+
+The half-wave voltage $V_\pi$ is the RF voltage at which the EOM imparts
+a phase shift of $\pi$ radians. Since phase modulation creates optical
+sidebands whose amplitudes follow Bessel functions of the modulation
+index $\beta = \pi V_\text{pk} / V_\pi$, the scanning FP cavity can
+resolve those sidebands and give us $\beta$ as a function of applied
+voltage — from which $V_\pi$ drops out as a simple linear-fit parameter.
+
+```mermaid
+flowchart TD
+    A["1 — Acquire reference trace\n(RF off)"] --> B["2 — Locate cavity peaks,\nmeasure FSR in time"]
+    B --> C["3 — Turn RF on,\nacquire modulated trace"]
+    C --> D["4 — Integrate carrier\nand sideband areas"]
+    D --> E["5 — Compute ratio\nR = A_sb / A_carrier"]
+    E --> F["6 — Invert Bessel relation\nR = J₁(β)² / J₀(β)²  →  β"]
+    F --> G["7 — Repeat for each\nRF power level"]
+    G --> H["8 — Linear fit\nβ vs V_pk  →  V_π = π / slope"]
+
+    style A fill:#48a,color:#fff
+    style H fill:#484,color:#fff
+```
+
 ## How Vpi is extracted from the modulation-index fit
 
 The half-wave voltage $V_\pi$ is the voltage at which the electro-optic
@@ -96,6 +167,77 @@ frequency in the `vpi_fit_summary.csv` output.
 > ($V_{\text{rms}} = \sqrt{P \cdot R}$, $V_{\text{pk}} = \sqrt{2} \cdot V_{\text{rms}}$)
 > or looked up from an optional power-calibration table that maps
 > `(power_dbm, frequency_hz)` to measured $V_{\text{pk}}$.
+
+## Power calibration
+
+The modulation index $\beta$ is proportional to the peak voltage
+$V_\text{pk}$ at the EOM electrodes, so an accurate estimate of $V_\pi$
+requires an accurate estimate of $V_\text{pk}$. Two calibration methods
+are implemented; both sweep the same (frequency, power) grid as the main
+measurement and build a lookup table
+$(\text{frequency}, \text{power setting}) \mapsto V_\text{pk}$.
+
+### Method 1 — Scope-based (legacy)
+
+The RF signal is tapped into a second scope channel. For each grid point
+a sine fit extracts $V_\text{pk}$ directly from the time-domain waveform.
+
+**Limitation:** When the signal generator (or amplifier) produces
+significant harmonics, the captured waveform is no longer a pure sine.
+The fit either over- or under-estimates the fundamental amplitude,
+leading to a biased $V_\pi$.
+
+### Method 2 — Spectrum-analyzer-based (recommended)
+
+A spectrum analyzer measures the power in the fundamental tone and each
+harmonic ($2f, 3f, \ldots$) separately. The fundamental power
+$P_\text{fund}$ is converted to peak voltage:
+
+$$
+V_\text{pk} = \sqrt{2\,P_\text{fund}\,R}
+$$
+
+where $R$ is the load impedance (typically 50 Ω).
+
+Because the SA resolves each spectral line individually, the measurement
+is immune to harmonic distortion.
+
+```mermaid
+flowchart LR
+    subgraph "Scope-based (legacy)"
+        S1["RF → scope CH 2"] --> S2["Sine fit\non waveform"] --> S3["V_pk"]
+    end
+    subgraph "SA-based (recommended)"
+        A1["RF → spectrum\nanalyzer"] --> A2["Peak search\nat f, 2f, 3f …"] --> A3["P_fund (dBm)"]
+        A3 --> A4["V_pk =\n√(2·P·R)"]
+    end
+
+    style S3 fill:#a84,color:#fff
+    style A4 fill:#484,color:#fff
+```
+
+### Harmonic diagnostics
+
+When using the SA method, `cavityscope` records the power of each
+harmonic and computes:
+
+- **THD (%)** — total harmonic distortion relative to the fundamental.
+- **dBc levels** — each harmonic's power relative to the fundamental.
+  Below −30 dBc is negligible; above −20 dBc indicates significant
+  nonlinearity in the amplifier chain.
+- **Fundamental power fraction** — what share of total output power is
+  in the tone the modulator actually responds to.
+
+These diagnostics are saved as CSVs and plots in the calibration output
+folder so you can judge amplifier linearity at a glance.
+
+### Calibration lookup
+
+The resulting calibration table is stored in a `PowerCalibration` object
+that maps any `(power_dbm, frequency_hz)` query to a $V_\text{pk}$ via
+per-frequency linear interpolation. During the main sweep, each
+measurement point's $V_\text{pk}$ is looked up from this table instead
+of being computed analytically from the dBm set-point.
 
 ## Design principles
 
