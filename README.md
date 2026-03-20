@@ -38,11 +38,14 @@ flowchart LR
     RF["RF Signal\nGenerator"]
     Amp["RF\nAmplifier\n(optional)"]
     SA["Spectrum\nAnalyzer\n(optional)"]
+    Ramp["Ramp / Function\nGenerator"]
 
     Laser -- "free-space / fiber" --> EOM
     EOM -- "modulated beam" --> FP
     FP -- "transmission" --> PD
     PD -- "voltage" --> Scope
+
+    Ramp -- "ramp signal\n(piezo scan)" --> FP
 
     RF -- "RF out" --> Amp
     Amp -- "amplified RF" --> EOM
@@ -57,6 +60,7 @@ flowchart LR
     style RF fill:#a84,color:#fff,stroke:#862
     style Amp fill:#a84,color:#fff,stroke:#862
     style SA fill:#a84,color:#fff,stroke:#862
+    style Ramp fill:#a84,color:#fff,stroke:#862
 ```
 
 | Instrument | Role | Protocol class | Example driver |
