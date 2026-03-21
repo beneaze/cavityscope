@@ -4,7 +4,12 @@ from cavityscope.analysis.measurement import (
     add_voltage_columns,
 )
 from cavityscope.analysis.rf_voltage import extract_vpk_from_trace
-from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk, solve_beta_from_ratio
+from cavityscope.analysis.vpi_fitting import (
+    fit_beta_vs_vpk,
+    solve_beta_all_branches,
+    solve_beta_from_ratio,
+    unwrap_beta,
+)
 from cavityscope.analysis.harmonics import (
     compute_harmonic_metrics,
     build_harmonics_dataframe,
@@ -37,7 +42,9 @@ __all__ = [
     "add_voltage_columns",
     "extract_vpk_from_trace",
     "fit_beta_vs_vpk",
+    "solve_beta_all_branches",
     "solve_beta_from_ratio",
+    "unwrap_beta",
     "compute_harmonic_metrics",
     "build_harmonics_dataframe",
     "build_thd_dataframe",

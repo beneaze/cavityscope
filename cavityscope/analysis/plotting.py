@@ -184,25 +184,47 @@ def plot_beta_fit(
     freq_hz: float,
     cfg: SweepConfig,
 ) -> None:
-    """Plot beta vs Vpk with the linear fit overlaid."""
+    """Plot beta vs Vpk with the linear fit overlaid.
+
+    When ``beta_unwrapped`` is present the plot shows both the raw
+    Branch-1 values (faded) and the unwrapped values (solid).
+    """
+    has_unwrapped = "beta_unwrapped" in dfg.columns
+    beta_col = "beta_unwrapped" if has_unwrapped else "beta_est"
+
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
 
     used = dfg[dfg["used_for_vpi_fit"]].copy()
     rejected = dfg[~dfg["used_for_vpi_fit"]].copy()
+
+    if has_unwrapped:
+        ax.scatter(
+            dfg["estimated_vpk_at_load"],
+            dfg["beta_est"],
+            s=30,
+            marker=".",
+            color="0.65",
+            alpha=0.5,
+            label="raw (branch 1)",
+            zorder=2,
+        )
+
     if not rejected.empty:
         ax.scatter(
             rejected["estimated_vpk_at_load"],
-            rejected["beta_est"],
+            rejected[beta_col],
             s=55,
             marker="x",
             label="rejected",
+            zorder=3,
         )
     if not used.empty:
         ax.scatter(
             used["estimated_vpk_at_load"],
-            used["beta_est"],
+            used[beta_col],
             s=65,
-            label="used",
+            label="used" + (" (unwrapped)" if has_unwrapped else ""),
+            zorder=4,
         )
 
     slope = fit_row.get("fit_slope_beta_per_v", float("nan"))
@@ -210,7 +232,7 @@ def plot_beta_fit(
     if np.isfinite(slope) and np.isfinite(intercept) and len(used) >= 2:
         xmax = max(float(np.max(dfg["estimated_vpk_at_load"])), 1e-9)
         xfit = np.linspace(0.0, 1.05 * xmax, 200)
-        ax.plot(xfit, slope * xfit + intercept, label="fit")
+        ax.plot(xfit, slope * xfit + intercept, label="fit", zorder=5)
 
     title = (
         f"Beta vs Vpk, f_RF={freq_hz/1e9:.6f} GHz\n"

@@ -57,6 +57,14 @@ class SweepConfig:
     fit_include_intercept: bool = True
     min_points_for_vpi_fit: int = 3
 
+    # -- Beta unwrapping (resolves Bessel branch ambiguity above Vpi) ---------
+    beta_unwrap: bool = True
+    beta_max_for_unwrap: float = 8.0
+
+    # -- Robust Vpi fit (iterative sigma-clipping) ----------------------------
+    fit_sigma_clip: float = 0.0       # 0 = disabled; 2.5–3.0 recommended
+    fit_sigma_clip_max_iter: int = 5
+
     # -- Optional Vpi estimation -----------------------------------------------
     compute_vpi: bool = True
     net_power_offset_db: float = 0.0

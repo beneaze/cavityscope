@@ -19,7 +19,7 @@ from cavityscope.analysis.plotting import (
     plot_power_calibration,
     plot_vpi_vs_frequency,
 )
-from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk
+from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk, unwrap_beta
 from cavityscope.core.calibration import PowerCalibration
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.utils import ensure_dir
@@ -195,6 +195,15 @@ def compute_vpi_fits(
     fit_plot_dir = ensure_dir(Path(output_dir) / "fit_plots") if output_dir else None
 
     for fhz, dfg in results_df.groupby("rf_frequency_hz"):
+        dfg = dfg.copy()
+
+        if cfg.beta_unwrap and "sb_to_carrier_ratio" in dfg.columns:
+            vpk = dfg["estimated_vpk_at_load"].to_numpy(dtype=float)
+            ratios = dfg["sb_to_carrier_ratio"].to_numpy(dtype=float)
+            dfg["beta_unwrapped"] = unwrap_beta(
+                vpk, ratios, max_beta=cfg.beta_max_for_unwrap,
+            )
+
         fit_row = {"rf_frequency_hz": float(fhz), **fit_beta_vs_vpk(dfg, cfg)}
         fit_rows.append(fit_row)
         if fit_plot_dir:
