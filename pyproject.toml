@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+netcdf = ["xarray", "netCDF4"]
 dev = ["pytest", "ruff", "jupyterlab"]
 
 [tool.setuptools.packages.find]

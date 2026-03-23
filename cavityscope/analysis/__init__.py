@@ -44,6 +44,11 @@ from cavityscope.analysis.postprocess import (
     load_calibration_run,
     reanalyze_with_calibration,
 )
+from cavityscope.analysis.xarray_export import (
+    load_sweep_netcdf,
+    save_sweep_netcdf,
+    sweep_to_xarray,
+)
 
 __all__ = [
     "ReferenceInfo",
@@ -81,4 +86,7 @@ __all__ = [
     "compute_s21_analysis",
     "load_calibration_run",
     "reanalyze_with_calibration",
+    "sweep_to_xarray",
+    "save_sweep_netcdf",
+    "load_sweep_netcdf",
 ]

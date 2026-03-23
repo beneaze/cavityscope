@@ -42,6 +42,7 @@ from cavityscope.core.instruments import (
     SpectrumAnalyzerInterface,
 )
 from cavityscope.core.utils import (
+    IncrementalCsvWriter,
     dbm_to_vrms_into_r,
     ensure_dir,
     make_calibration_output_dir,
@@ -134,6 +135,7 @@ def run_power_calibration(
     time.sleep(0.2)
 
     rows: List[Dict] = []
+    cal_csv = IncrementalCsvWriter(out / "power_calibration.csv")
     fit_plot_dir = ensure_dir(out / "fit_plots")
 
     manual_timebase = cfg.cal_timebase_s_per_div
@@ -195,13 +197,15 @@ def run_power_calibration(
                     n_cycles=fit_cycles,
                 )
                 meas["power_dbm"] = power_dbm
-                rows.append({
+                row = {
                     "frequency_hz": freq_hz,
                     "power_dbm": power_dbm,
                     "vpk_v": meas["measured_vpk_v"],
                     **{k: v for k, v in meas.items()
                        if k not in ("measured_vpk_v", "power_dbm")},
-                })
+                }
+                rows.append(row)
+                cal_csv.write_row(row)
 
                 if verbose:
                     ok = "ok" if meas["fit_converged"] else "FALLBACK"
@@ -228,6 +232,7 @@ def run_power_calibration(
         rf_source.set_output(False)
     finally:
         pbar.close()
+        cal_csv.close()
         scope.set_timebase(original_timebase)
         if verbose:
             print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
@@ -319,6 +324,7 @@ def run_sa_power_calibration(
     time.sleep(0.2)
 
     rows: List[Dict] = []
+    cal_csv = IncrementalCsvWriter(out / "power_calibration.csv")
     harmonic_measurements: List[Dict] = []
     spectrum_dir = ensure_dir(out / "spectra") if cfg.cal_sa_save_spectra else None
 
@@ -437,6 +443,7 @@ def run_sa_power_calibration(
                             row[f"h{k}_dbc"] = h["power_dbm"] - measured_dbm
 
                 rows.append(row)
+                cal_csv.write_row(row)
                 pbar.update(1)
 
             plt.close("all")
@@ -445,6 +452,7 @@ def run_sa_power_calibration(
         rf_source.set_output(False)
     finally:
         pbar.close()
+        cal_csv.close()
 
     cal_df = pd.DataFrame(rows)
     calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
@@ -543,32 +551,35 @@ def run_sweep(
     results: List[Dict] = []
     reference_rows: List[Dict] = []
 
+    sweep_csv = IncrementalCsvWriter(run_dir / "sweep_results.csv")
+    ref_csv = IncrementalCsvWriter(run_dir / "reference_summary.csv")
+
     n_freqs = len(cfg.rf_frequencies_hz)
     n_powers = len(cfg.rf_powers_dbm)
     n_total = n_freqs * (1 + n_powers)  # 1 reference + n_powers per frequency
     pbar = tqdm(total=n_total, desc="Vpi sweep", unit="pt",
                 disable=not verbose, leave=True)
 
-    for freq_hz in cfg.rf_frequencies_hz:
-        freq_hz = float(freq_hz)
-        if verbose:
-            pbar.write(f"\n=== RF frequency: {freq_hz/1e9:.6f} GHz ===")
+    try:
+        for freq_hz in cfg.rf_frequencies_hz:
+            freq_hz = float(freq_hz)
+            if verbose:
+                pbar.write(f"\n=== RF frequency: {freq_hz/1e9:.6f} GHz ===")
 
-        pbar.set_postfix_str(f"{freq_hz/1e9:.4f} GHz, ref")
-        rf_source.apply(freq_hz=freq_hz, enabled=False)
-        time.sleep(cfg.settle_after_rf_change_s)
+            pbar.set_postfix_str(f"{freq_hz/1e9:.4f} GHz, ref")
+            rf_source.apply(freq_hz=freq_hz, enabled=False)
+            time.sleep(cfg.settle_after_rf_change_s)
 
-        t_ref, y_ref, _ = _acquire_with_retry(
-            scope, scope_channel,
-            timeout_s=cfg.trigger_timeout_s,
-            settle_s=cfg.settle_after_scope_single_s,
-            max_retries=cfg.scope_read_max_retries, verbose=verbose,
-        )
-        ref = analyze_reference_trace(t_ref, y_ref, freq_hz, cfg)
-        ref_carrier_area = compute_carrier_area(t_ref, y_ref, ref, cfg)
+            t_ref, y_ref, _ = _acquire_with_retry(
+                scope, scope_channel,
+                timeout_s=cfg.trigger_timeout_s,
+                settle_s=cfg.settle_after_scope_single_s,
+                max_retries=cfg.scope_read_max_retries, verbose=verbose,
+            )
+            ref = analyze_reference_trace(t_ref, y_ref, freq_hz, cfg)
+            ref_carrier_area = compute_carrier_area(t_ref, y_ref, ref, cfg)
 
-        reference_rows.append(
-            {
+            ref_row = {
                 "rf_frequency_hz": freq_hz,
                 "reference_fsr_time_s": ref.fsr_time_s,
                 "reference_baseline_v": ref.baseline_v,
@@ -579,140 +590,142 @@ def run_sweep(
                 "sideband_window_hz": cfg.sideband_window_hz,
                 "reference_carrier_area_v_s": ref_carrier_area,
             }
-        )
+            reference_rows.append(ref_row)
+            ref_csv.write_row(ref_row)
 
-        ref_picked = {
-            "carrier_times_s": np.asarray([ref.chosen_carrier_time_s]),
-            "carrier_heights_v": np.asarray([ref.chosen_carrier_height_v]),
-            "sb_minus_times_s": np.asarray([]),
-            "sb_minus_heights_v": np.asarray([]),
-            "sb_plus_times_s": np.asarray([]),
-            "sb_plus_heights_v": np.asarray([]),
-        }
-
-        if cfg.save_reference_plots:
-            plot_trace_with_windows(
-                t_ref,
-                y_ref,
-                ref,
-                rf_frequency_hz=freq_hz,
-                title=f"Reference trace, RF off, f_RF={freq_hz/1e9:.6f} GHz",
-                out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.png",
-                cfg=cfg,
-                picked_points=ref_picked,
-            )
-
-        if cfg.save_frequency_plots:
-            plot_trace_frequency_space(
-                t_ref,
-                y_ref,
-                ref,
-                rf_frequency_hz=freq_hz,
-                title=f"Reference (freq. space), RF off, f_RF={freq_hz/1e9:.6f} GHz",
-                out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.4f}MHz.png",
-                cfg=cfg,
-                picked_points=ref_picked,
-            )
-
-        if cfg.save_raw_traces_csv:
-            pd.DataFrame({"t_s": t_ref, "v": y_ref}).to_csv(
-                dirs["raw_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.csv",
-                index=False,
-            )
-
-        pbar.update(1)
-
-        rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
-                        enabled=True)
-        time.sleep(cfg.settle_after_rf_change_s)
-
-        for power_dbm in cfg.rf_powers_dbm:
-            power_dbm = float(power_dbm)
-            pbar.set_postfix_str(
-                f"{freq_hz/1e9:.4f} GHz, {power_dbm:+.1f} dBm"
-            )
-            if verbose:
-                pbar.write(f"  power = {power_dbm:7.3f} dBm")
-
-            rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
-            time.sleep(cfg.settle_after_rf_change_s)
-
-            t, y, _ = _acquire_with_retry(
-                scope, scope_channel,
-                timeout_s=cfg.trigger_timeout_s,
-                settle_s=cfg.settle_after_scope_single_s,
-                max_retries=cfg.scope_read_max_retries, verbose=verbose,
-            )
-
-            meas, picked = measure_trace_against_reference(
-                t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg
-            )
-            row = {
-                "rf_frequency_hz": freq_hz,
-                "rf_power_dbm": power_dbm,
-                "reference_fsr_time_s": ref.fsr_time_s,
-                **meas,
+            ref_picked = {
+                "carrier_times_s": np.asarray([ref.chosen_carrier_time_s]),
+                "carrier_heights_v": np.asarray([ref.chosen_carrier_height_v]),
+                "sb_minus_times_s": np.asarray([]),
+                "sb_minus_heights_v": np.asarray([]),
+                "sb_plus_times_s": np.asarray([]),
+                "sb_plus_heights_v": np.asarray([]),
             }
-            row = add_voltage_columns(
-                row, power_dbm, cfg,
-                calibration=calibration,
-                rf_frequency_hz=freq_hz,
-            )
-            results.append(row)
 
-            if cfg.save_trace_plots:
-                mode_label = cfg.sideband_mode.lower()
-                trace_label = f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}"
-                trace_stem = f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
+            if cfg.save_reference_plots:
                 plot_trace_with_windows(
-                    t,
-                    y,
+                    t_ref,
+                    y_ref,
                     ref,
                     rf_frequency_hz=freq_hz,
-                    title=trace_label,
-                    out_png=dirs["traces_dir"] / f"{trace_stem}.png",
+                    title=f"Reference trace, RF off, f_RF={freq_hz/1e9:.6f} GHz",
+                    out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.png",
                     cfg=cfg,
-                    picked_points=picked,
+                    picked_points=ref_picked,
                 )
 
             if cfg.save_frequency_plots:
-                freq_label = (
-                    f"Freq. space: f_RF={freq_hz/1e9:.6f} GHz, "
-                    f"P_RF={power_dbm:.2f} dBm"
-                )
-                freq_stem = f"freq_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
                 plot_trace_frequency_space(
-                    t,
-                    y,
+                    t_ref,
+                    y_ref,
                     ref,
                     rf_frequency_hz=freq_hz,
-                    title=freq_label,
-                    out_png=dirs["freq_dir"] / f"{freq_stem}.png",
+                    title=f"Reference (freq. space), RF off, f_RF={freq_hz/1e9:.6f} GHz",
+                    out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.4f}MHz.png",
                     cfg=cfg,
-                    picked_points=picked,
+                    picked_points=ref_picked,
                 )
 
             if cfg.save_raw_traces_csv:
-                pd.DataFrame({"t_s": t, "v": y}).to_csv(
-                    dirs["raw_dir"]
-                    / f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.csv",
+                pd.DataFrame({"t_s": t_ref, "v": y_ref}).to_csv(
+                    dirs["raw_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.csv",
                     index=False,
                 )
 
             pbar.update(1)
 
-        # Free matplotlib renderer buffers to avoid OOM on large sweeps
-        plt.close("all")
-        gc.collect()
+            rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
+                            enabled=True)
+            time.sleep(cfg.settle_after_rf_change_s)
 
-    pbar.close()
+            for power_dbm in cfg.rf_powers_dbm:
+                power_dbm = float(power_dbm)
+                pbar.set_postfix_str(
+                    f"{freq_hz/1e9:.4f} GHz, {power_dbm:+.1f} dBm"
+                )
+                if verbose:
+                    pbar.write(f"  power = {power_dbm:7.3f} dBm")
+
+                rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
+                time.sleep(cfg.settle_after_rf_change_s)
+
+                t, y, _ = _acquire_with_retry(
+                    scope, scope_channel,
+                    timeout_s=cfg.trigger_timeout_s,
+                    settle_s=cfg.settle_after_scope_single_s,
+                    max_retries=cfg.scope_read_max_retries, verbose=verbose,
+                )
+
+                meas, picked = measure_trace_against_reference(
+                    t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg
+                )
+                row = {
+                    "rf_frequency_hz": freq_hz,
+                    "rf_power_dbm": power_dbm,
+                    "reference_fsr_time_s": ref.fsr_time_s,
+                    **meas,
+                }
+                row = add_voltage_columns(
+                    row, power_dbm, cfg,
+                    calibration=calibration,
+                    rf_frequency_hz=freq_hz,
+                )
+                results.append(row)
+                sweep_csv.write_row(row)
+
+                if cfg.save_trace_plots:
+                    mode_label = cfg.sideband_mode.lower()
+                    trace_label = f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}"
+                    trace_stem = f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
+                    plot_trace_with_windows(
+                        t,
+                        y,
+                        ref,
+                        rf_frequency_hz=freq_hz,
+                        title=trace_label,
+                        out_png=dirs["traces_dir"] / f"{trace_stem}.png",
+                        cfg=cfg,
+                        picked_points=picked,
+                    )
+
+                if cfg.save_frequency_plots:
+                    freq_label = (
+                        f"Freq. space: f_RF={freq_hz/1e9:.6f} GHz, "
+                        f"P_RF={power_dbm:.2f} dBm"
+                    )
+                    freq_stem = f"freq_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
+                    plot_trace_frequency_space(
+                        t,
+                        y,
+                        ref,
+                        rf_frequency_hz=freq_hz,
+                        title=freq_label,
+                        out_png=dirs["freq_dir"] / f"{freq_stem}.png",
+                        cfg=cfg,
+                        picked_points=picked,
+                    )
+
+                if cfg.save_raw_traces_csv:
+                    pd.DataFrame({"t_s": t, "v": y}).to_csv(
+                        dirs["raw_dir"]
+                        / f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.csv",
+                        index=False,
+                    )
+
+                pbar.update(1)
+
+            plt.close("all")
+            gc.collect()
+
+    finally:
+        pbar.close()
+        sweep_csv.close()
+        ref_csv.close()
 
     df = pd.DataFrame(results)
     ref_df = pd.DataFrame(reference_rows)
     fit_df = compute_vpi_fits(df, cfg, output_dir=run_dir)
 
-    df.to_csv(run_dir / "sweep_results.csv", index=False)
-    ref_df.to_csv(run_dir / "reference_summary.csv", index=False)
     fit_df.to_csv(run_dir / "vpi_fit_summary.csv", index=False)
 
     s21_data: Dict[str, pd.DataFrame | Dict] = {}
@@ -720,6 +733,22 @@ def run_sweep(
         s21_data = compute_s21_analysis(
             df, ref_df, cfg, output_dir=run_dir, verbose=verbose,
         )
+
+    try:
+        from cavityscope.analysis.xarray_export import save_sweep_netcdf
+
+        save_sweep_netcdf(
+            df, ref_df, fit_df, cfg,
+            run_dir / "sweep_results.nc",
+            s21_df=s21_data.get("s21_results"),
+            verbose=verbose,
+        )
+    except ImportError:
+        if verbose:
+            print("  (xarray/netCDF4 not installed — skipping .nc export)")
+    except Exception as exc:
+        if verbose:
+            print(f"  [warning] NetCDF export failed: {exc}")
 
     if verbose:
         print("\nSaved to:", run_dir)

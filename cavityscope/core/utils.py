@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 import math
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -59,3 +60,52 @@ def hz_window_to_half_time(
     width_hz: float, fsr_hz: float, fsr_time_s: float
 ) -> float:
     return 0.5 * float(width_hz) / float(fsr_hz) * float(fsr_time_s)
+
+
+class IncrementalCsvWriter:
+    """Write rows to a CSV file one at a time, flushing after each row.
+
+    The header is written automatically from the keys of the first row.
+    Subsequent rows are appended and flushed immediately, so the file on
+    disk always contains every row written so far — even if the process
+    crashes before the sweep finishes.
+
+    Usage::
+
+        with IncrementalCsvWriter(path) as w:
+            for row in rows:
+                w.write_row(row)
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path)
+        self._file = None
+        self._writer: Optional[csv.DictWriter] = None
+        self._columns: Optional[List[str]] = None
+
+    def write_row(self, row: dict) -> None:
+        if self._file is None:
+            self._columns = list(row.keys())
+            self._file = open(self.path, "w", newline="", encoding="utf-8")
+            self._writer = csv.DictWriter(
+                self._file,
+                fieldnames=self._columns,
+                extrasaction="ignore",
+                restval="",
+            )
+            self._writer.writeheader()
+            self._file.flush()
+        self._writer.writerow(row)
+        self._file.flush()
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+            self._writer = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()

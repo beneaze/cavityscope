@@ -6,6 +6,7 @@ from cavityscope.core.instruments import (
 )
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.utils import (
+    IncrementalCsvWriter,
     ensure_dir,
     make_calibration_output_dir,
     make_measurement_output_dirs,
@@ -13,6 +14,7 @@ from cavityscope.core.utils import (
 )
 
 __all__ = [
+    "IncrementalCsvWriter",
     "PowerCalibration",
     "ScopeInterface",
     "RFSourceInterface",
