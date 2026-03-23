@@ -635,6 +635,52 @@ def plot_harmonic_heatmap(
     plt.close(fig)
 
 
+def _resolve_label_positions(
+    peak_x: np.ndarray,
+    peak_y: np.ndarray,
+    x_span: float,
+    y_span: float,
+) -> list:
+    """Compute non-overlapping (xytext_x, xytext_y, ha) for peak annotations.
+
+    Spreads labels that would otherwise overlap by alternating left/right
+    placement and staggering vertically.
+    """
+    min_dx_frac = 0.06
+    min_dy_frac = 0.10
+    min_dx = min_dx_frac * max(x_span, 1e-6)
+    min_dy = min_dy_frac * max(y_span, 1e-6)
+    n = len(peak_x)
+    if n == 0:
+        return []
+
+    order = np.argsort(peak_x)
+    positions = [None] * n
+
+    base_x_off = 0.015 * x_span
+    base_y_off = 0.04 * y_span
+
+    for idx in range(n):
+        i = order[idx]
+        px, py = float(peak_x[i]), float(peak_y[i])
+        tx = px + base_x_off
+        ty = py + base_y_off
+        ha = "left"
+
+        for prev_idx in range(idx):
+            j = order[prev_idx]
+            ptx, pty, _ = positions[j]
+            if abs(tx - ptx) < min_dx and abs(ty - pty) < min_dy:
+                tx = px - base_x_off
+                ha = "right"
+                ty = py + base_y_off + min_dy * (1 + idx % 2)
+                break
+
+        positions[i] = (tx, ty, ha)
+
+    return positions
+
+
 def plot_s21_resonance_map(
     s21_df: pd.DataFrame,
     resonances: pd.DataFrame,
@@ -645,33 +691,59 @@ def plot_s21_resonance_map(
 
     Shows raw and smoothed S21-like dB vs RF frequency with detected
     resonance peaks annotated.  Overdriven regions are shaded in red.
+    A summary table of detected resonances is rendered below the plot.
     """
     sl = s21_df.sort_values("rf_frequency_mhz")
     x = sl["rf_frequency_mhz"].to_numpy()
     y_raw = sl["s21_like_db"].to_numpy()
     y_smooth = sl["s21_like_db_smooth"].to_numpy()
 
-    fig, ax = plt.subplots(figsize=(11, 5.5))
-    ax.plot(x, y_raw, lw=1.0, alpha=0.45, label="S21-like (raw)")
-    ax.plot(x, y_smooth, lw=2.0, label="S21-like (smoothed)")
+    has_table = not resonances.empty
+    height_ratios = [4, 1] if has_table else [1]
+    fig, axes = plt.subplots(
+        len(height_ratios), 1, figsize=(11, 7.0 if has_table else 5.5),
+        gridspec_kw={"height_ratios": height_ratios},
+    )
+    ax = axes[0] if has_table else axes
+
+    # Y-limits from smoothed data with a small margin
+    y_sm_finite = y_smooth[np.isfinite(y_smooth)]
+    if y_sm_finite.size > 0:
+        y_lo = float(np.min(y_sm_finite)) - 5
+        y_hi = float(np.max(y_sm_finite)) + 5
+    else:
+        y_lo, y_hi = -40, 5
+
+    ax.plot(x, y_raw, lw=0.8, alpha=1.0, color="C0", label="S21-like (raw)")
+    ax.plot(x, y_smooth, lw=2.0, color="C1", label="S21-like (smoothed)")
 
     if "overdriven" in sl.columns and sl["overdriven"].any():
         od = sl["overdriven"].to_numpy().astype(bool)
-        ylo = float(np.nanmin(y_raw)) - 3
-        yhi = float(np.nanmax(y_raw)) + 3
         ax.fill_between(
-            x, ylo, yhi, where=od,
+            x, y_lo, y_hi, where=od,
             alpha=0.10, color="red", label="overdriven region",
         )
 
-    for _, row in resonances.iterrows():
-        ax.axvline(row["center_mhz"], ls="--", lw=0.8, color="0.5")
-        ax.annotate(
-            f"{row['center_mhz']:.1f} MHz\n{row['peak_s21_like_db']:.2f} dB",
-            xy=(row["center_mhz"], row["peak_s21_like_db"]),
-            xytext=(6, 10), textcoords="offset points",
-            fontsize=9, ha="left", va="bottom",
-        )
+    ax.set_ylim(y_lo, y_hi)
+
+    if not resonances.empty:
+        peak_x = resonances["center_mhz"].to_numpy()
+        peak_y = resonances["peak_s21_like_db"].to_numpy()
+        x_span = float(x[-1] - x[0]) if len(x) > 1 else 1.0
+        y_span = y_hi - y_lo
+
+        positions = _resolve_label_positions(peak_x, peak_y, x_span, y_span)
+
+        for idx, (_, row) in enumerate(resonances.iterrows()):
+            ax.axvline(row["center_mhz"], ls="--", lw=0.8, color="0.5")
+            tx, ty, ha = positions[idx]
+            ax.annotate(
+                f"{row['center_mhz']:.1f} MHz\n{row['peak_s21_like_db']:.2f} dB",
+                xy=(row["center_mhz"], row["peak_s21_like_db"]),
+                xytext=(tx, ty), textcoords="data",
+                fontsize=8, ha=ha, va="bottom",
+                arrowprops=dict(arrowstyle="-", color="0.4", lw=0.6),
+            )
 
     pwr_str = f",  $P_{{RF}}$ = {power_dbm:+.1f} dBm" if power_dbm is not None else ""
     ax.set_title(f"EOM resonance map \u2014 {_S21_FORMULA}{pwr_str}", fontsize=10)
@@ -679,6 +751,41 @@ def plot_s21_resonance_map(
     ax.set_ylabel(_S21_YLABEL)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
+
+    # ---- resonance summary table ----
+    if has_table:
+        ax_tbl = axes[1]
+        ax_tbl.axis("off")
+
+        col_labels = ["#", "Center (MHz)", "Peak (dB)", "FWHM (MHz)", "Q"]
+        cell_text = []
+        for i, (_, row) in enumerate(resonances.iterrows(), start=1):
+            cell_text.append([
+                str(i),
+                f"{row['center_mhz']:.1f}",
+                f"{row['peak_s21_like_db']:.2f}",
+                f"{row['fwhm_mhz']:.2f}",
+                f"{row['q_estimate']:.1f}",
+            ])
+
+        tbl = ax_tbl.table(
+            cellText=cell_text,
+            colLabels=col_labels,
+            loc="center",
+            cellLoc="center",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(9)
+        tbl.scale(0.9, 1.4)
+
+        for (r, c), cell in tbl.get_celld().items():
+            if r == 0:
+                cell.set_facecolor("#d9e2f3")
+                cell.set_text_props(fontweight="bold")
+            else:
+                cell.set_facecolor("#f5f5f5" if r % 2 == 0 else "white")
+            cell.set_edgecolor("#cccccc")
+
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
@@ -741,19 +848,26 @@ def plot_s21_full_analysis(
     axes[1].grid(True, alpha=0.3)
 
     # ---- panel 3: S21-like metric ----
-    axes[2].plot(x, sl["s21_like_db"], lw=1.0, alpha=0.4, label="Raw")
-    axes[2].plot(x, sl["s21_like_db_smooth"], lw=2.0, label="Smoothed")
+    y_smooth = sl["s21_like_db_smooth"].to_numpy()
+    y_sm_fin = y_smooth[np.isfinite(y_smooth)]
+    if y_sm_fin.size > 0:
+        s21_ylo = float(np.min(y_sm_fin)) - 5
+        s21_yhi = float(np.max(y_sm_fin)) + 5
+    else:
+        s21_ylo, s21_yhi = -40, 5
+
+    axes[2].plot(x, sl["s21_like_db"], lw=0.8, alpha=1.0, color="C0", label="Raw")
+    axes[2].plot(x, y_smooth, lw=2.0, color="C1", label="Smoothed")
     for _, row in resonances.iterrows():
         axes[2].axvline(row["center_mhz"], ls="--", lw=0.8, color="0.5")
         axes[2].axvspan(row["left_mhz"], row["right_mhz"], alpha=0.12)
     if "overdriven" in sl.columns and sl["overdriven"].any():
         od = sl["overdriven"].to_numpy().astype(bool)
-        ylo = float(np.nanmin(sl["s21_like_db"])) - 3
-        yhi = float(np.nanmax(sl["s21_like_db"])) + 3
         axes[2].fill_between(
-            x, ylo, yhi, where=od,
+            x, s21_ylo, s21_yhi, where=od,
             alpha=0.10, color="red", label="overdriven",
         )
+    axes[2].set_ylim(s21_ylo, s21_yhi)
     axes[2].set_ylabel(_S21_YLABEL)
     axes[2].set_xlabel("RF frequency (MHz)")
     pwr_str = f" ($P_{{RF}}$ = {power_dbm:+.1f} dBm)" if power_dbm is not None else ""
