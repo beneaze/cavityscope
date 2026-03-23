@@ -116,7 +116,7 @@ class SweepConfig:
     s21_plot_mode: str = "combined"
     # Savitzky–Golay window for smoothing before peak finding (0 = auto).
     s21_smoothing_window: int = 0
-    s21_peak_prominence_db: float = 0.5
+    s21_peak_prominence_db: float = 0.8
     s21_peak_min_separation_mhz: float = 5.0
     s21_peak_threshold_db: float = -12.0
 

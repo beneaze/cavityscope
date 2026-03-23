@@ -7,10 +7,12 @@ Vpi fitting, reanalysis) lives in ``cavityscope.analysis``.
 
 from __future__ import annotations
 
+import gc
 import json
 import time
 from typing import Dict, List, Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
@@ -219,6 +221,9 @@ def run_power_calibration(
                         pbar.write(f"    [warning] fit plot failed: {exc}")
 
                 pbar.update(1)
+
+            plt.close("all")
+            gc.collect()
 
         rf_source.set_output(False)
     finally:
@@ -433,6 +438,9 @@ def run_sa_power_calibration(
 
                 rows.append(row)
                 pbar.update(1)
+
+            plt.close("all")
+            gc.collect()
 
         rf_source.set_output(False)
     finally:
@@ -692,6 +700,10 @@ def run_sweep(
                 )
 
             pbar.update(1)
+
+        # Free matplotlib renderer buffers to avoid OOM on large sweeps
+        plt.close("all")
+        gc.collect()
 
     pbar.close()
 

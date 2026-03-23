@@ -242,10 +242,14 @@ def find_resonance_peaks(
         int(round(cfg.s21_peak_min_separation_mhz / max(abs(dx), 1e-9))),
     )
 
+    # Only look for local maxima (upward resonance peaks).
+    # The ``height`` filter on the smoothed trace rejects noise bumps
+    # early, before any raw-data refinement.
     peaks, props = find_peaks(
         s21_db_smooth,
         prominence=cfg.s21_peak_prominence_db,
         distance=distance,
+        height=cfg.s21_peak_threshold_db,
     )
     if len(peaks) == 0:
         return pd.DataFrame(columns=cols)
@@ -257,16 +261,21 @@ def find_resonance_peaks(
 
     rows = []
     for i, pk in enumerate(peaks):
+        # Centre frequency and peak level come from the stable
+        # smoothed trace; only FWHM is measured on the raw data.
+        center = float(freq_mhz[pk])
+        peak_db = float(s21_db_smooth[pk])
+
+        # Refine peak position in lightly smoothed raw data for FWHM
         search_r = max(3, int(round(3.0 / max(abs(dx), 1e-9))))
         lo = max(0, pk - search_r)
         hi = min(n, pk + search_r + 1)
         refined = lo + int(np.argmax(y_bw[lo:hi]))
 
         fwhm, left, right = _measure_3db_bandwidth(freq_mhz, y_bw, refined)
-        peak_db = float(y_bw[refined])
 
         rows.append({
-            "center_mhz": float(freq_mhz[refined]),
+            "center_mhz": center,
             "peak_s21_like_db": peak_db,
             "peak_sideband_fraction": 10.0 ** (peak_db / 10.0),
             "prominence_db": float(props["prominences"][i]),
@@ -279,10 +288,6 @@ def find_resonance_peaks(
     summary["q_estimate"] = (
         summary["center_mhz"] / summary["fwhm_mhz"].clip(lower=1e-6)
     )
-
-    summary = summary[
-        summary["peak_s21_like_db"] > cfg.s21_peak_threshold_db
-    ].copy()
     return summary.sort_values("center_mhz").reset_index(drop=True)
 
 
