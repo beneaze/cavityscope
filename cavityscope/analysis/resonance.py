@@ -36,11 +36,11 @@ quantifying transfer efficiency in overdriven regions.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy.signal import find_peaks, peak_widths, savgol_filter
+from scipy.signal import find_peaks, savgol_filter
 
 from cavityscope.core.config import SweepConfig
 
@@ -51,6 +51,59 @@ def _auto_savgol_window(n_points: int) -> int:
         return max(3, n_points | 1)
     w = min(31, max(5, n_points // 3))
     return w | 1
+
+
+def _light_smooth(y: np.ndarray, window: int = 7) -> np.ndarray:
+    """Apply a narrow Savitzky-Golay filter that preserves narrow peak shapes."""
+    n = len(y)
+    if n < 5:
+        return y.copy()
+    w = min(window, n) | 1
+    po = min(2, w - 1)
+    return savgol_filter(y, window_length=w, polyorder=po, mode="interp")
+
+
+def _measure_3db_bandwidth(
+    freq_mhz: np.ndarray,
+    s21_db: np.ndarray,
+    peak_idx: int,
+) -> Tuple[float, float, float]:
+    """Measure the 3 dB bandwidth around a peak.
+
+    Scans left and right from *peak_idx* until the signal drops 3 dB
+    below the peak value, using linear interpolation at the crossings.
+
+    Returns ``(fwhm_mhz, left_mhz, right_mhz)``.
+    """
+    n = len(freq_mhz)
+    peak_val = float(s21_db[peak_idx])
+    threshold = peak_val - 3.0
+
+    left_mhz = float(freq_mhz[0])
+    for i in range(peak_idx - 1, -1, -1):
+        if s21_db[i] <= threshold:
+            y0, y1 = float(s21_db[i]), float(s21_db[i + 1])
+            f0, f1 = float(freq_mhz[i]), float(freq_mhz[i + 1])
+            denom = y1 - y0
+            if abs(denom) > 1e-12:
+                left_mhz = f0 + (threshold - y0) / denom * (f1 - f0)
+            else:
+                left_mhz = 0.5 * (f0 + f1)
+            break
+
+    right_mhz = float(freq_mhz[-1])
+    for i in range(peak_idx + 1, n):
+        if s21_db[i] <= threshold:
+            y0, y1 = float(s21_db[i - 1]), float(s21_db[i])
+            f0, f1 = float(freq_mhz[i - 1]), float(freq_mhz[i])
+            denom = y0 - y1
+            if abs(denom) > 1e-12:
+                right_mhz = f0 + (y0 - threshold) / denom * (f1 - f0)
+            else:
+                right_mhz = 0.5 * (f0 + f1)
+            break
+
+    return right_mhz - left_mhz, left_mhz, right_mhz
 
 
 def compute_s21_columns(
@@ -144,10 +197,28 @@ def compute_s21_columns(
 
 def find_resonance_peaks(
     freq_mhz: np.ndarray,
+    s21_db_raw: np.ndarray,
     s21_db_smooth: np.ndarray,
     cfg: SweepConfig,
 ) -> pd.DataFrame:
-    """Find resonance peaks in a pre-smoothed S21-like response curve.
+    """Find resonance peaks and measure their 3 dB bandwidth.
+
+    Peak *positions* are detected on the heavily smoothed trace
+    (``s21_db_smooth``).  The **3 dB bandwidth** (FWHM) is then
+    measured on a lightly smoothed version of the raw trace so that
+    narrow resonances are not artificially broadened by the detection
+    filter.
+
+    Parameters
+    ----------
+    freq_mhz : array
+        Frequency axis in MHz (sorted ascending).
+    s21_db_raw : array
+        Raw S21-like dB values (same length as *freq_mhz*).
+    s21_db_smooth : array
+        Heavily smoothed S21-like dB used for peak detection.
+    cfg : SweepConfig
+        Peak-finding thresholds.
 
     Returns
     -------
@@ -166,7 +237,10 @@ def find_resonance_peaks(
         return pd.DataFrame(columns=cols)
 
     dx = float(np.median(np.diff(freq_mhz))) if n > 1 else 1.0
-    distance = max(1, int(round(cfg.s21_peak_min_separation_mhz / max(abs(dx), 1e-9))))
+    distance = max(
+        1,
+        int(round(cfg.s21_peak_min_separation_mhz / max(abs(dx), 1e-9))),
+    )
 
     peaks, props = find_peaks(
         s21_db_smooth,
@@ -176,19 +250,32 @@ def find_resonance_peaks(
     if len(peaks) == 0:
         return pd.DataFrame(columns=cols)
 
-    widths, _, left_ips, right_ips = peak_widths(
-        s21_db_smooth, peaks, rel_height=0.5,
-    )
+    # Light smoothing of raw data for 3 dB bandwidth measurement:
+    # narrow enough to preserve sharp resonances, wide enough to
+    # suppress single-sample noise dips.
+    y_bw = _light_smooth(s21_db_raw, window=7)
 
-    summary = pd.DataFrame({
-        "center_mhz": freq_mhz[peaks],
-        "peak_s21_like_db": s21_db_smooth[peaks],
-        "peak_sideband_fraction": 10.0 ** (s21_db_smooth[peaks] / 10.0),
-        "prominence_db": props["prominences"],
-        "fwhm_mhz": widths * abs(dx),
-        "left_mhz": np.interp(left_ips, np.arange(n), freq_mhz),
-        "right_mhz": np.interp(right_ips, np.arange(n), freq_mhz),
-    })
+    rows = []
+    for i, pk in enumerate(peaks):
+        search_r = max(3, int(round(3.0 / max(abs(dx), 1e-9))))
+        lo = max(0, pk - search_r)
+        hi = min(n, pk + search_r + 1)
+        refined = lo + int(np.argmax(y_bw[lo:hi]))
+
+        fwhm, left, right = _measure_3db_bandwidth(freq_mhz, y_bw, refined)
+        peak_db = float(y_bw[refined])
+
+        rows.append({
+            "center_mhz": float(freq_mhz[refined]),
+            "peak_s21_like_db": peak_db,
+            "peak_sideband_fraction": 10.0 ** (peak_db / 10.0),
+            "prominence_db": float(props["prominences"][i]),
+            "fwhm_mhz": fwhm,
+            "left_mhz": left,
+            "right_mhz": right,
+        })
+
+    summary = pd.DataFrame(rows)
     summary["q_estimate"] = (
         summary["center_mhz"] / summary["fwhm_mhz"].clip(lower=1e-6)
     )
@@ -218,6 +305,7 @@ def compute_resonance_summary(
         sl = grp.sort_values("rf_frequency_hz")
         summaries[float(pwr)] = find_resonance_peaks(
             sl["rf_frequency_mhz"].to_numpy(),
+            sl["s21_like_db"].to_numpy(),
             sl["s21_like_db_smooth"].to_numpy(),
             cfg,
         )
