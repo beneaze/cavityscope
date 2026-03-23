@@ -17,7 +17,14 @@ from cavityscope.analysis.measurement import add_voltage_columns
 from cavityscope.analysis.plotting import (
     plot_beta_fit,
     plot_power_calibration,
+    plot_s21_full_analysis,
+    plot_s21_power_overlay,
+    plot_s21_resonance_map,
     plot_vpi_vs_frequency,
+)
+from cavityscope.analysis.resonance import (
+    compute_resonance_summary,
+    compute_s21_columns,
 )
 from cavityscope.analysis.vpi_fitting import fit_beta_vs_vpk, unwrap_beta
 from cavityscope.core.calibration import PowerCalibration
@@ -280,3 +287,124 @@ def reanalyze_with_calibration(
                 )
 
     return {"results": df, "fits": fit_df}
+
+
+# ---------------------------------------------------------------------------
+# S21-like resonance analysis
+# ---------------------------------------------------------------------------
+
+def compute_s21_analysis(
+    results_df: pd.DataFrame,
+    ref_df: pd.DataFrame,
+    cfg: SweepConfig,
+    output_dir: Optional[str | Path] = None,
+    verbose: bool = True,
+) -> Dict[str, pd.DataFrame | Dict]:
+    """Compute S21-like resonance metrics and (optionally) save plots.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Sweep results (from CSV or ``run_sweep``).
+    ref_df : pd.DataFrame
+        Reference summary (must include ``reference_carrier_area_v_s``
+        for absolute-efficiency and overdriving analysis).
+    cfg : SweepConfig
+        Controls plotting mode, smoothing, peak thresholds, and
+        overdriving detection.
+    output_dir : str or Path, optional
+        When given, saves ``s21_results.csv``, ``s21_resonance_summary.csv``,
+        and the requested plots.
+    verbose : bool
+        Print summary to stdout.
+
+    Returns
+    -------
+    dict
+        ``"s21_results"``  enriched DataFrame,
+        ``"resonance_summaries"``  dict mapping power_dbm -> peak DataFrame.
+    """
+    s21_df = compute_s21_columns(results_df, ref_df, cfg)
+    summaries = compute_resonance_summary(results_df, ref_df, cfg)
+
+    powers = sorted(s21_df["rf_power_dbm"].unique())
+    is_single_power = len(powers) == 1
+    mode = cfg.s21_plot_mode.lower()
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        s21_df.to_csv(out / "s21_results.csv", index=False)
+
+        combined_rows = []
+        for pwr, sdf in summaries.items():
+            if not sdf.empty:
+                tmp = sdf.copy()
+                tmp.insert(0, "rf_power_dbm", pwr)
+                combined_rows.append(tmp)
+        if combined_rows:
+            pd.concat(combined_rows, ignore_index=True).to_csv(
+                out / "s21_resonance_summary.csv", index=False,
+            )
+
+        # ---- single-power or "separate" / "both": per-power plots ----
+        if is_single_power or mode in ("separate", "both"):
+            for pwr in powers:
+                sl = s21_df[s21_df["rf_power_dbm"] == pwr]
+                rez = summaries.get(pwr, pd.DataFrame())
+                suffix = "" if is_single_power else f"_{pwr:+06.1f}dBm"
+                try:
+                    plot_s21_resonance_map(
+                        sl, rez,
+                        out / f"s21_resonance_map{suffix}.png",
+                        power_dbm=None if is_single_power else pwr,
+                    )
+                except Exception as exc:
+                    if verbose:
+                        print(f"  [warning] S21 resonance map plot failed: {exc}")
+                try:
+                    plot_s21_full_analysis(
+                        sl, rez,
+                        out / f"s21_full_analysis{suffix}.png",
+                        power_dbm=None if is_single_power else pwr,
+                        overdriving_threshold=cfg.overdriving_depletion_threshold,
+                    )
+                except Exception as exc:
+                    if verbose:
+                        print(f"  [warning] S21 full analysis plot failed: {exc}")
+
+        # ---- multi-power "combined" / "both": overlay plot ----
+        if not is_single_power and mode in ("combined", "both"):
+            try:
+                plot_s21_power_overlay(
+                    s21_df, summaries,
+                    out / "s21_resonance_map.png",
+                )
+            except Exception as exc:
+                if verbose:
+                    print(f"  [warning] S21 power overlay plot failed: {exc}")
+
+    # ---- console summary ----
+    if verbose:
+        n_overdriven = int(s21_df["overdriven"].sum()) if "overdriven" in s21_df.columns else 0
+        print(f"\nS21-like analysis: {len(s21_df)} points, "
+              f"{sum(len(v) for v in summaries.values())} resonances detected")
+        if n_overdriven:
+            print(f"  {n_overdriven} points flagged as overdriven "
+                  f"(power depletion > {cfg.overdriving_depletion_threshold*100:.0f}%)")
+        for pwr in powers:
+            rez = summaries.get(pwr, pd.DataFrame())
+            if not rez.empty:
+                tag = f" @ {pwr:+.1f} dBm" if not is_single_power else ""
+                cols = ["center_mhz", "peak_s21_like_db", "fwhm_mhz", "q_estimate"]
+                avail = [c for c in cols if c in rez.columns]
+                print(f"  Resonances{tag}:")
+                print(
+                    rez[avail].to_string(
+                        index=False,
+                        float_format=lambda v: f"{v:.3f}",
+                    )
+                )
+
+    return {"s21_results": s21_df, "resonance_summaries": summaries}

@@ -17,6 +17,7 @@ from tqdm.auto import tqdm
 
 from cavityscope.analysis.measurement import (
     add_voltage_columns,
+    compute_carrier_area,
     measure_trace_against_reference,
 )
 from cavityscope.analysis.plotting import (
@@ -24,7 +25,11 @@ from cavityscope.analysis.plotting import (
     plot_trace_frequency_space,
     plot_trace_with_windows,
 )
-from cavityscope.analysis.postprocess import build_calibration, compute_vpi_fits
+from cavityscope.analysis.postprocess import (
+    build_calibration,
+    compute_s21_analysis,
+    compute_vpi_fits,
+)
 from cavityscope.analysis.reference import analyze_reference_trace
 from cavityscope.analysis.rf_voltage import extract_vpk_from_trace
 from cavityscope.core.calibration import PowerCalibration
@@ -552,6 +557,7 @@ def run_sweep(
             max_retries=cfg.scope_read_max_retries, verbose=verbose,
         )
         ref = analyze_reference_trace(t_ref, y_ref, freq_hz, cfg)
+        ref_carrier_area = compute_carrier_area(t_ref, y_ref, ref, cfg)
 
         reference_rows.append(
             {
@@ -563,6 +569,7 @@ def run_sweep(
                 "chosen_carrier_height_v": ref.chosen_carrier_height_v,
                 "carrier_window_hz": cfg.carrier_window_hz,
                 "sideband_window_hz": cfg.sideband_window_hz,
+                "reference_carrier_area_v_s": ref_carrier_area,
             }
         )
 
@@ -696,7 +703,13 @@ def run_sweep(
     ref_df.to_csv(run_dir / "reference_summary.csv", index=False)
     fit_df.to_csv(run_dir / "vpi_fit_summary.csv", index=False)
 
+    s21_data: Dict[str, pd.DataFrame | Dict] = {}
+    if cfg.plot_s21_response:
+        s21_data = compute_s21_analysis(
+            df, ref_df, cfg, output_dir=run_dir, verbose=verbose,
+        )
+
     if verbose:
         print("\nSaved to:", run_dir)
 
-    return {"results": df, "references": ref_df, "fits": fit_df}
+    return {"results": df, "references": ref_df, "fits": fit_df, **s21_data}

@@ -14,6 +14,10 @@ from cavityscope.analysis.reference import ReferenceInfo
 from cavityscope.core.config import SweepConfig
 from cavityscope.core.utils import hz_window_to_half_time, robust_baseline
 
+# Re-usable S21 title prefix
+_S21_YLABEL = "S21-like response (dB)"
+_S21_FORMULA = r"10$\cdot$log$_{10}$[(SB$^-$+SB$^+$) / (C+SB$^-$+SB$^+$)]"
+
 
 def _smooth_and_baseline(y_v: np.ndarray, cfg: SweepConfig):
     baseline = robust_baseline(y_v, cfg.baseline_percentile)
@@ -628,6 +632,188 @@ def plot_harmonic_heatmap(
     fig.colorbar(im, ax=ax, label="dBc", shrink=0.85)
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    plt.close(fig)
+
+
+def plot_s21_resonance_map(
+    s21_df: pd.DataFrame,
+    resonances: pd.DataFrame,
+    out_png: Path | str,
+    power_dbm: Optional[float] = None,
+) -> None:
+    """S21-like resonance map for a single RF power level.
+
+    Shows raw and smoothed S21-like dB vs RF frequency with detected
+    resonance peaks annotated.  Overdriven regions are shaded in red.
+    """
+    sl = s21_df.sort_values("rf_frequency_mhz")
+    x = sl["rf_frequency_mhz"].to_numpy()
+    y_raw = sl["s21_like_db"].to_numpy()
+    y_smooth = sl["s21_like_db_smooth"].to_numpy()
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    ax.plot(x, y_raw, lw=1.0, alpha=0.45, label="S21-like (raw)")
+    ax.plot(x, y_smooth, lw=2.0, label="S21-like (smoothed)")
+
+    if "overdriven" in sl.columns and sl["overdriven"].any():
+        od = sl["overdriven"].to_numpy().astype(bool)
+        ylo = float(np.nanmin(y_raw)) - 3
+        yhi = float(np.nanmax(y_raw)) + 3
+        ax.fill_between(
+            x, ylo, yhi, where=od,
+            alpha=0.10, color="red", label="overdriven region",
+        )
+
+    for _, row in resonances.iterrows():
+        ax.axvline(row["center_mhz"], ls="--", lw=0.8, color="0.5")
+        ax.annotate(
+            f"{row['center_mhz']:.1f} MHz\n{row['peak_s21_like_db']:.2f} dB",
+            xy=(row["center_mhz"], row["peak_s21_like_db"]),
+            xytext=(6, 10), textcoords="offset points",
+            fontsize=9, ha="left", va="bottom",
+        )
+
+    pwr_str = f",  $P_{{RF}}$ = {power_dbm:+.1f} dBm" if power_dbm is not None else ""
+    ax.set_title(f"EOM resonance map \u2014 {_S21_FORMULA}{pwr_str}", fontsize=10)
+    ax.set_xlabel("RF frequency (MHz)")
+    ax.set_ylabel(_S21_YLABEL)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def plot_s21_full_analysis(
+    s21_df: pd.DataFrame,
+    resonances: pd.DataFrame,
+    out_png: Path | str,
+    power_dbm: Optional[float] = None,
+    overdriving_threshold: float = 0.20,
+) -> None:
+    """Three-panel S21 analysis: integrated areas, power depletion, and S21.
+
+    Panel 1  Carrier, SB-, and SB+ integrated areas vs frequency.
+    Panel 2  Power depletion (%) with overdriving threshold line, or
+             sideband-to-carrier ratio if depletion data is unavailable.
+    Panel 3  S21-like (raw + smoothed) with resonance FWHM spans.
+    """
+    sl = s21_df.sort_values("rf_frequency_mhz")
+    x = sl["rf_frequency_mhz"].to_numpy()
+    eps = np.finfo(float).eps
+
+    fig, axes = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+
+    # ---- panel 1: integrated areas ----
+    axes[0].plot(x, sl["carrier_area_v_s"], label="Carrier", lw=1.2)
+    axes[0].plot(x, sl["sb_minus_area_v_s"], label="SB\u207b", lw=1.0)
+    axes[0].plot(x, sl["sb_plus_area_v_s"], label="SB\u207a", lw=1.0)
+    axes[0].set_ylabel("Peak area (V\u00b7s)")
+    axes[0].set_title("Integrated Fabry\u2013P\u00e9rot peak areas")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+
+    # ---- panel 2: power depletion or sideband-to-carrier ratio ----
+    has_depletion = (
+        "power_depletion" in sl.columns
+        and sl["power_depletion"].notna().any()
+    )
+    if has_depletion:
+        axes[1].plot(x, sl["power_depletion"] * 100, lw=1.2, color="C3")
+        axes[1].axhline(
+            overdriving_threshold * 100, ls=":", lw=1.0,
+            color="red", alpha=0.7, label=f"threshold ({overdriving_threshold*100:.0f}%)",
+        )
+        axes[1].set_ylabel("Power depletion (%)")
+        axes[1].set_title(
+            "Power depletion = 1 \u2212 (C+SB\u207b+SB\u207a) / reference carrier"
+        )
+        axes[1].legend(loc="best")
+    elif "sb_to_carrier_ratio" in sl.columns:
+        ratio = sl["sb_to_carrier_ratio"].to_numpy(dtype=float)
+        axes[1].plot(
+            x,
+            10.0 * np.log10(np.maximum(ratio, eps)),
+            lw=1.0,
+        )
+        axes[1].set_ylabel("10\u00b7log\u2081\u2080[(SB\u207b+SB\u207a)/Carrier] (dB)")
+        axes[1].set_title("Sideband-to-carrier ratio (reference only)")
+    axes[1].grid(True, alpha=0.3)
+
+    # ---- panel 3: S21-like metric ----
+    axes[2].plot(x, sl["s21_like_db"], lw=1.0, alpha=0.4, label="Raw")
+    axes[2].plot(x, sl["s21_like_db_smooth"], lw=2.0, label="Smoothed")
+    for _, row in resonances.iterrows():
+        axes[2].axvline(row["center_mhz"], ls="--", lw=0.8, color="0.5")
+        axes[2].axvspan(row["left_mhz"], row["right_mhz"], alpha=0.12)
+    if "overdriven" in sl.columns and sl["overdriven"].any():
+        od = sl["overdriven"].to_numpy().astype(bool)
+        ylo = float(np.nanmin(sl["s21_like_db"])) - 3
+        yhi = float(np.nanmax(sl["s21_like_db"])) + 3
+        axes[2].fill_between(
+            x, ylo, yhi, where=od,
+            alpha=0.10, color="red", label="overdriven",
+        )
+    axes[2].set_ylabel(_S21_YLABEL)
+    axes[2].set_xlabel("RF frequency (MHz)")
+    pwr_str = f" ($P_{{RF}}$ = {power_dbm:+.1f} dBm)" if power_dbm is not None else ""
+    axes[2].set_title(f"S21-like resonance metric{pwr_str}")
+    axes[2].grid(True, alpha=0.3)
+    axes[2].legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def plot_s21_power_overlay(
+    s21_df: pd.DataFrame,
+    resonances_by_power: Dict[float, pd.DataFrame],
+    out_png: Path | str,
+) -> None:
+    """S21-like response vs frequency, one curve per RF power level.
+
+    Uses a colourmap indexed by power to distinguish curves and adds
+    a colour bar.  Resonance peaks for each power are marked with
+    matching-colour dots.
+    """
+    powers = sorted(s21_df["rf_power_dbm"].unique())
+    n_powers = len(powers)
+    if n_powers == 0:
+        return
+
+    cmap = plt.cm.viridis
+    norm = plt.Normalize(vmin=min(powers), vmax=max(powers))
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    for pwr in powers:
+        colour = cmap(norm(pwr))
+        sl = s21_df[s21_df["rf_power_dbm"] == pwr].sort_values("rf_frequency_mhz")
+        ax.plot(
+            sl["rf_frequency_mhz"], sl["s21_like_db_smooth"],
+            lw=1.4, color=colour, alpha=0.85,
+        )
+        rez = resonances_by_power.get(pwr, pd.DataFrame())
+        if not rez.empty:
+            ax.scatter(
+                rez["center_mhz"], rez["peak_s21_like_db"],
+                marker="o", s=30, color=colour, zorder=5, edgecolors="k", linewidths=0.4,
+            )
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    fig.colorbar(sm, ax=ax, label="RF power (dBm)", shrink=0.85)
+
+    ax.set_title(
+        f"S21-like response vs RF frequency (all power levels)\n{_S21_FORMULA}",
+        fontsize=10,
+    )
+    ax.set_xlabel("RF frequency (MHz)")
+    ax.set_ylabel(_S21_YLABEL)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
     plt.close(fig)
 
 

@@ -184,3 +184,22 @@ def add_voltage_columns(
     row["estimated_vpk_at_load"] = vpk
     row["estimated_vpp_at_load"] = vpp
     return row
+
+
+def compute_carrier_area(
+    t: np.ndarray,
+    y_v: np.ndarray,
+    ref: ReferenceInfo,
+    cfg: SweepConfig,
+) -> float:
+    """Integrate the carrier peak using the same preprocessing as the RF-on path.
+
+    Used on the RF-off reference trace to obtain a normalisation baseline
+    for S21-like and overdriving metrics.
+    """
+    _, _, y_sm = _smooth_and_baseline(y_v, cfg)
+    carrier_hw = hz_window_to_half_time(
+        cfg.carrier_window_hz, cfg.cavity_fsr_hz, ref.fsr_time_s,
+    )
+    area, _, _ = _integrate_window(t, y_sm, ref.chosen_carrier_time_s, carrier_hw)
+    return area

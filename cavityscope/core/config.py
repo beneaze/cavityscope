@@ -105,5 +105,27 @@ class SweepConfig:
     save_raw_traces_csv: bool = True
     save_frequency_plots: bool = True
 
+    # -- S21-like resonance analysis -------------------------------------------
+    # Computes sideband_fraction = (SB⁻+SB⁺)/(Carrier+SB⁻+SB⁺) and finds
+    # resonance peaks in the transfer function vs RF frequency.
+    plot_s21_response: bool = True
+    # How to arrange S21 plots when multiple power levels are swept.
+    # "combined" — one plot with all powers overlaid;
+    # "separate" — one plot per power level;
+    # "both"     — emit both styles.
+    s21_plot_mode: str = "combined"
+    # Savitzky–Golay window for smoothing before peak finding (0 = auto).
+    s21_smoothing_window: int = 0
+    s21_peak_prominence_db: float = 0.8
+    s21_peak_min_separation_mhz: float = 5.0
+    s21_peak_threshold_db: float = -12.0
+
+    # -- Overdriving detection -------------------------------------------------
+    # When the modulation index exceeds the first J₀ zero the carrier vanishes
+    # and power migrates to higher-order sidebands that are not captured.
+    # Detection compares (Carrier+SB⁻+SB⁺) to the RF-off reference area.
+    detect_overdriving: bool = True
+    overdriving_depletion_threshold: float = 0.20
+
     def to_dict(self) -> dict:
         return asdict(self)
