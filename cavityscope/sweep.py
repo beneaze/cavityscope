@@ -13,6 +13,8 @@ import time
 from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
@@ -159,6 +161,9 @@ def run_power_calibration(
     pbar = tqdm(total=n_total, desc="Scope cal", unit="pt",
                 disable=not verbose, leave=True)
 
+    _plot_fig = Figure()
+    FigureCanvasAgg(_plot_fig)
+
     try:
         for freq_hz in cfg.rf_frequencies_hz:
             freq_hz = float(freq_hz)
@@ -232,6 +237,7 @@ def run_power_calibration(
                         out_png=fit_plot_dir
                         / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
                         n_cycles=fit_cycles,
+                        reuse_fig=_plot_fig,
                     )
                 except Exception as exc:
                     if verbose:
@@ -247,6 +253,8 @@ def run_power_calibration(
     finally:
         pbar.close()
         cal_csv.close()
+        _plot_fig.clf()
+        del _plot_fig
         scope.set_timebase(original_timebase)
         if verbose:
             print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
@@ -344,6 +352,9 @@ def run_sa_power_calibration(
     pbar = tqdm(total=n_total, desc="SA cal", unit="pt",
                 disable=not verbose, leave=True)
 
+    _plot_fig = Figure()
+    FigureCanvasAgg(_plot_fig)
+
     try:
         for freq_hz in cfg.rf_frequencies_hz:
             freq_hz = float(freq_hz)
@@ -417,6 +428,7 @@ def run_sa_power_calibration(
                                 power_offset_db=cfg.cal_sa_power_offset_db,
                                 out_png=spectrum_dir
                                 / f"spectrum_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
+                                reuse_fig=_plot_fig,
                             )
                         except Exception as exc:
                             if verbose:
@@ -485,6 +497,8 @@ def run_sa_power_calibration(
         cal_csv.close()
         harmonics_csv_writer.close()
         thd_csv_writer.close()
+        _plot_fig.clf()
+        del _plot_fig
 
     cal_path = out / "power_calibration.csv"
     cal_df = pd.read_csv(cal_path) if cal_path.exists() else pd.DataFrame()
@@ -598,6 +612,9 @@ def run_sweep(
                 disable=not verbose, leave=True)
     point_counter = 0
 
+    _plot_fig = Figure()
+    FigureCanvasAgg(_plot_fig)
+
     try:
         for freq_hz in cfg.rf_frequencies_hz:
             freq_hz = float(freq_hz)
@@ -649,7 +666,9 @@ def run_sweep(
                     out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.png",
                     cfg=cfg,
                     picked_points=ref_picked,
+                    reuse_fig=_plot_fig,
                 )
+                gc.collect()
 
             if cfg.save_frequency_plots:
                 plot_trace_frequency_space(
@@ -661,6 +680,7 @@ def run_sweep(
                     out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.4f}MHz.png",
                     cfg=cfg,
                     picked_points=ref_picked,
+                    reuse_fig=_plot_fig,
                 )
 
             if cfg.save_raw_traces_csv:
@@ -736,7 +756,9 @@ def run_sweep(
                         cfg=cfg,
                         picked_points=picked,
                         preprocessed=pp,
+                        reuse_fig=_plot_fig,
                     )
+                    gc.collect()
 
                 if cfg.save_frequency_plots and do_plots:
                     freq_label = (
@@ -754,6 +776,7 @@ def run_sweep(
                         cfg=cfg,
                         picked_points=picked,
                         preprocessed=pp,
+                        reuse_fig=_plot_fig,
                     )
 
                 if cfg.save_raw_traces_csv:
@@ -773,6 +796,8 @@ def run_sweep(
         pbar.close()
         sweep_csv.close()
         ref_csv.close()
+        _plot_fig.clf()
+        del _plot_fig
         if original_mdepth is not None and hasattr(scope, "set_memory_depth"):
             scope.set_memory_depth(original_mdepth)
 

@@ -77,6 +77,7 @@ def plot_trace_with_windows(
     cfg: SweepConfig,
     picked_points: Optional[Dict[str, np.ndarray]] = None,
     preprocessed: Optional[Tuple] = None,
+    reuse_fig=None,
 ) -> None:
     """Plot a single scope trace with carrier and sideband integration windows."""
     if preprocessed is not None:
@@ -101,7 +102,14 @@ def plot_trace_with_windows(
 
     t_plot = t_ds * 1e3
 
-    fig, ax = plt.subplots(figsize=(12, 4.5))
+    if reuse_fig is not None:
+        fig = reuse_fig
+        fig.clear()
+        fig.set_size_inches(12, 4.5)
+        ax = fig.add_subplot(111)
+    else:
+        fig, ax = plt.subplots(figsize=(12, 4.5))
+
     ax.plot(t_plot, y_bs_ds, lw=1.0, label="baseline-subtracted")
     ax.plot(t_plot, y_sm_ds, lw=1.0, label="smoothed")
 
@@ -143,8 +151,9 @@ def plot_trace_with_windows(
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
-    fig.clf()
-    plt.close(fig)
+    if reuse_fig is None:
+        fig.clf()
+        plt.close(fig)
 
 
 def plot_trace_frequency_space(
@@ -157,6 +166,7 @@ def plot_trace_frequency_space(
     cfg: SweepConfig,
     picked_points: Optional[Dict[str, np.ndarray]] = None,
     preprocessed: Optional[Tuple] = None,
+    reuse_fig=None,
 ) -> None:
     """Plot a scope trace converted to frequency space relative to the carrier.
 
@@ -178,7 +188,14 @@ def plot_trace_frequency_space(
     carrier_half_hz = 0.5 * cfg.carrier_window_hz
     sideband_half_hz = 0.5 * cfg.sideband_window_hz
 
-    fig, ax = plt.subplots(figsize=(12, 4.5))
+    if reuse_fig is not None:
+        fig = reuse_fig
+        fig.clear()
+        fig.set_size_inches(12, 4.5)
+        ax = fig.add_subplot(111)
+    else:
+        fig, ax = plt.subplots(figsize=(12, 4.5))
+
     ax.plot(f_ds, y_bs_ds, lw=0.8, alpha=0.5, label="baseline-subtracted")
     ax.plot(f_ds, y_sm_ds, lw=1.0, label="smoothed")
 
@@ -210,7 +227,6 @@ def plot_trace_frequency_space(
 
     ax.axvline(0, ls="--", lw=1.0, color="k", alpha=0.4, label="carrier")
 
-    # Mark FSR boundaries for context
     ax.axvline(-fsr_hz / 2 / 1e9, ls="-", lw=0.6, color="gray", alpha=0.35)
     ax.axvline(fsr_hz / 2 / 1e9, ls="-", lw=0.6, color="gray", alpha=0.35, label="FSR/2")
 
@@ -235,8 +251,9 @@ def plot_trace_frequency_space(
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
-    fig.clf()
-    plt.close(fig)
+    if reuse_fig is None:
+        fig.clf()
+        plt.close(fig)
 
 
 def plot_beta_fit(
@@ -505,6 +522,7 @@ def plot_sa_spectrum(
     metrics: dict,
     out_png: Path | str,
     power_offset_db: float = 0.0,
+    reuse_fig=None,
 ) -> None:
     """Plot a single wideband spectrum with fundamental and harmonics labelled.
 
@@ -518,7 +536,13 @@ def plot_sa_spectrum(
         external attenuator).  The trace and markers are shifted together
         so relative metrics (dBc, THD) are unaffected.
     """
-    fig, ax = plt.subplots(figsize=(11, 4.5))
+    if reuse_fig is not None:
+        fig = reuse_fig
+        fig.clear()
+        fig.set_size_inches(11, 4.5)
+        ax = fig.add_subplot(111)
+    else:
+        fig, ax = plt.subplots(figsize=(11, 4.5))
 
     display_amps = wideband_amps + power_offset_db
     ax.plot(wideband_freqs / 1e9, display_amps,
@@ -563,8 +587,9 @@ def plot_sa_spectrum(
     ax.legend(loc="upper right", fontsize=7)
     fig.tight_layout()
     fig.savefig(out_png, dpi=130)
-    fig.clf()
-    plt.close(fig)
+    if reuse_fig is None:
+        fig.clf()
+        plt.close(fig)
 
 
 def plot_harmonic_waterfall(
@@ -1006,6 +1031,7 @@ def plot_calibration_fit(
     meas: dict,
     out_png: Path | str,
     n_cycles: int = 20,
+    reuse_fig=None,
 ) -> None:
     """Plot a calibration sine fit overlaid on the scope trace.
 
@@ -1033,16 +1059,23 @@ def plot_calibration_fit(
     if not np.isfinite(offset):
         offset = float(np.mean(v_win))
 
-    # Reconstruct fit on the same centred time axis used by the fitter
     t0 = meas.get("fit_t0_s", float(t_win[0] + t_win[-1]) / 2.0)
     t_rel = t_win - t0
     fit_curve = vpk * np.sin(2.0 * np.pi * f_fit * t_rel + phase) + offset
     residual = v_win - fit_curve
 
-    fig, (ax_top, ax_bot) = plt.subplots(
-        2, 1, figsize=(10, 5), sharex=True,
-        gridspec_kw={"height_ratios": [3, 1]},
-    )
+    if reuse_fig is not None:
+        fig = reuse_fig
+        fig.clear()
+        fig.set_size_inches(10, 5)
+        gs = fig.add_gridspec(2, 1, height_ratios=[3, 1])
+        ax_top = fig.add_subplot(gs[0])
+        ax_bot = fig.add_subplot(gs[1], sharex=ax_top)
+    else:
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2, 1, figsize=(10, 5), sharex=True,
+            gridspec_kw={"height_ratios": [3, 1]},
+        )
 
     ax_top.plot(t_win * 1e9, v_win, color="C0", lw=0.6, alpha=0.7, label="data")
     ax_top.plot(t_win * 1e9, fit_curve, color="tab:red", lw=1.2,
@@ -1065,5 +1098,6 @@ def plot_calibration_fit(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=120)
-    fig.clf()
-    plt.close(fig)
+    if reuse_fig is None:
+        fig.clf()
+        plt.close(fig)
