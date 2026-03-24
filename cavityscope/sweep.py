@@ -224,10 +224,11 @@ def run_power_calibration(
                     if verbose:
                         pbar.write(f"    [warning] fit plot failed: {exc}")
 
-                pbar.update(1)
+                del t_rf, v_rf, meas
+                plt.close("all")
+                gc.collect()
 
-            plt.close("all")
-            gc.collect()
+                pbar.update(1)
 
         rf_source.set_output(False)
     finally:
@@ -444,10 +445,11 @@ def run_sa_power_calibration(
 
                 rows.append(row)
                 cal_csv.write_row(row)
-                pbar.update(1)
 
-            plt.close("all")
-            gc.collect()
+                plt.close("all")
+                gc.collect()
+
+                pbar.update(1)
 
         rf_source.set_output(False)
     finally:
@@ -632,6 +634,10 @@ def run_sweep(
                     index=False,
                 )
 
+            del t_ref, y_ref, ref_picked
+            plt.close("all")
+            gc.collect()
+
             pbar.update(1)
 
             rf_source.apply(freq_hz=freq_hz, power_dbm=float(cfg.rf_powers_dbm[0]),
@@ -712,10 +718,11 @@ def run_sweep(
                         index=False,
                     )
 
-                pbar.update(1)
+                del t, y, meas, picked
+                plt.close("all")
+                gc.collect()
 
-            plt.close("all")
-            gc.collect()
+                pbar.update(1)
 
     finally:
         pbar.close()

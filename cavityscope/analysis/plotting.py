@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +17,46 @@ from cavityscope.core.utils import hz_window_to_half_time, robust_baseline
 # Re-usable S21 title prefix
 _S21_YLABEL = "S21-like response (dB)"
 _S21_FORMULA = r"10$\cdot$log$_{10}$[(SB$^-$+SB$^+$) / (C+SB$^-$+SB$^+$)]"
+
+_MAX_PLOT_POINTS = 50_000
+
+
+def _downsample_for_plot(
+    *arrays: np.ndarray,
+    max_points: int = _MAX_PLOT_POINTS,
+) -> Tuple[np.ndarray, ...]:
+    """Min-max decimation preserving the visual envelope of a waveform.
+
+    Uses the *last* array to choose which indices to keep (min and max
+    within each bin), then subsamples all arrays at those indices.
+    """
+    n = arrays[0].size
+    if n <= max_points:
+        return arrays
+
+    n_bins = max_points // 2
+    key = arrays[-1]
+
+    trim = n - (n % n_bins)
+    bin_width = trim // n_bins
+    reshaped = key[:trim].reshape(n_bins, bin_width)
+
+    offsets = np.arange(n_bins) * bin_width
+    idx_min = offsets + reshaped.argmin(axis=1)
+    idx_max = offsets + reshaped.argmax(axis=1)
+
+    swap = idx_min > idx_max
+    indices = np.empty(2 * n_bins, dtype=np.intp)
+    indices[0::2] = np.where(swap, idx_max, idx_min)
+    indices[1::2] = np.where(swap, idx_min, idx_max)
+
+    mask = indices[0::2] != indices[1::2]
+    keep = np.empty(2 * n_bins, dtype=bool)
+    keep[0::2] = True
+    keep[1::2] = mask
+    indices = indices[keep]
+
+    return tuple(a[indices] for a in arrays)
 
 
 def _smooth_and_baseline(y_v: np.ndarray, cfg: SweepConfig):
@@ -39,6 +79,10 @@ def plot_trace_with_windows(
 ) -> None:
     """Plot a single scope trace with carrier and sideband integration windows."""
     _baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
+
+    t_ds, y_bs_ds, y_sm_ds = _downsample_for_plot(t, y_bs, y_sm)
+    del y_bs, y_sm
+
     fsr_hz = cfg.cavity_fsr_hz
     carrier_hw = hz_window_to_half_time(
         cfg.carrier_window_hz, fsr_hz, ref.fsr_time_s
@@ -51,9 +95,11 @@ def plot_trace_with_windows(
     sb_m_t = carrier_t - dt_sb
     sb_p_t = carrier_t + dt_sb
 
+    t_plot = t_ds * 1e3
+
     fig, ax = plt.subplots(figsize=(12, 4.5))
-    ax.plot(t * 1e3, y_bs, lw=1.0, label="baseline-subtracted")
-    ax.plot(t * 1e3, y_sm, lw=1.0, label="smoothed")
+    ax.plot(t_plot, y_bs_ds, lw=1.0, label="baseline-subtracted")
+    ax.plot(t_plot, y_sm_ds, lw=1.0, label="smoothed")
 
     ax.axvspan(
         (carrier_t - carrier_hw) * 1e3,
@@ -115,15 +161,17 @@ def plot_trace_frequency_space(
     fsr_hz = cfg.cavity_fsr_hz
     carrier_t = ref.chosen_carrier_time_s
 
-    f_rel = (t - carrier_t) / ref.fsr_time_s * fsr_hz
-    f_rel_ghz = f_rel / 1e9
+    f_rel_ghz = (t - carrier_t) / ref.fsr_time_s * fsr_hz / 1e9
+
+    f_ds, y_bs_ds, y_sm_ds = _downsample_for_plot(f_rel_ghz, y_bs, y_sm)
+    del f_rel_ghz, y_bs, y_sm
 
     carrier_half_hz = 0.5 * cfg.carrier_window_hz
     sideband_half_hz = 0.5 * cfg.sideband_window_hz
 
     fig, ax = plt.subplots(figsize=(12, 4.5))
-    ax.plot(f_rel_ghz, y_bs, lw=0.8, alpha=0.5, label="baseline-subtracted")
-    ax.plot(f_rel_ghz, y_sm, lw=1.0, label="smoothed")
+    ax.plot(f_ds, y_bs_ds, lw=0.8, alpha=0.5, label="baseline-subtracted")
+    ax.plot(f_ds, y_sm_ds, lw=1.0, label="smoothed")
 
     ax.axvspan(
         -carrier_half_hz / 1e9,
