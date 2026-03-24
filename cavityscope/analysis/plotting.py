@@ -76,9 +76,13 @@ def plot_trace_with_windows(
     out_png: Path | str,
     cfg: SweepConfig,
     picked_points: Optional[Dict[str, np.ndarray]] = None,
+    preprocessed: Optional[Tuple] = None,
 ) -> None:
     """Plot a single scope trace with carrier and sideband integration windows."""
-    _baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
+    if preprocessed is not None:
+        _baseline, y_bs, y_sm = preprocessed
+    else:
+        _baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
 
     t_ds, y_bs_ds, y_sm_ds = _downsample_for_plot(t, y_bs, y_sm)
     del y_bs, y_sm
@@ -151,13 +155,17 @@ def plot_trace_frequency_space(
     out_png: Path | str,
     cfg: SweepConfig,
     picked_points: Optional[Dict[str, np.ndarray]] = None,
+    preprocessed: Optional[Tuple] = None,
 ) -> None:
     """Plot a scope trace converted to frequency space relative to the carrier.
 
     The time axis is mapped to frequency offset from the chosen carrier via
     ``delta_f = (t - carrier_t) / fsr_time_s * cavity_fsr_hz``.
     """
-    _baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
+    if preprocessed is not None:
+        _baseline, y_bs, y_sm = preprocessed
+    else:
+        _baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
     fsr_hz = cfg.cavity_fsr_hz
     carrier_t = ref.chosen_carrier_time_s
 

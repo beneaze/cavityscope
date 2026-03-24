@@ -1,6 +1,7 @@
 from cavityscope.analysis.reference import ReferenceInfo, analyze_reference_trace
 from cavityscope.analysis.measurement import (
     measure_trace_against_reference,
+    preprocess_trace,
     add_voltage_columns,
     compute_carrier_area,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "ReferenceInfo",
     "analyze_reference_trace",
     "measure_trace_against_reference",
+    "preprocess_trace",
     "add_voltage_columns",
     "compute_carrier_area",
     "extract_vpk_from_trace",

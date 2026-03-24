@@ -46,15 +46,33 @@ def _integrate_window(
     return area, center_height, int(idx.size)
 
 
+def preprocess_trace(
+    y_v: np.ndarray, cfg: SweepConfig
+) -> Tuple[float, np.ndarray, np.ndarray]:
+    """Baseline-subtract and smooth a scope trace.
+
+    Returns ``(baseline, y_baseline_subtracted, y_smoothed)``.
+    Call once per acquisition and pass the result to
+    :func:`measure_trace_against_reference` and the plotting helpers
+    to avoid repeating the (identical) computation three times.
+    """
+    return _smooth_and_baseline(y_v, cfg)
+
+
 def measure_trace_against_reference(
     t: np.ndarray,
     y_v: np.ndarray,
     ref: ReferenceInfo,
     rf_frequency_hz: float,
     cfg: SweepConfig,
+    *,
+    preprocessed: Optional[Tuple[float, np.ndarray, np.ndarray]] = None,
 ) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """Measure carrier and sideband areas for one RF-on trace."""
-    baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
+    if preprocessed is not None:
+        baseline, y_bs, y_sm = preprocessed
+    else:
+        baseline, y_bs, y_sm = _smooth_and_baseline(y_v, cfg)
     fsr_hz = cfg.cavity_fsr_hz
 
     if rf_frequency_hz >= 0.5 * fsr_hz:

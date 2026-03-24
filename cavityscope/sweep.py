@@ -21,6 +21,7 @@ from cavityscope.analysis.measurement import (
     add_voltage_columns,
     compute_carrier_area,
     measure_trace_against_reference,
+    preprocess_trace,
 )
 from cavityscope.analysis.plotting import (
     plot_calibration_fit,
@@ -48,6 +49,20 @@ from cavityscope.core.utils import (
     make_calibration_output_dir,
     make_measurement_output_dirs,
 )
+
+
+def _save_trace(
+    raw_dir, stem: str, t: np.ndarray, y: np.ndarray, fmt: str,
+) -> None:
+    """Save a raw scope trace in the requested format."""
+    if fmt == "npy":
+        np.save(raw_dir / f"{stem}.npy", np.column_stack([t, y]))
+    elif fmt == "csv":
+        pd.DataFrame({"t_s": t, "v": y}).to_csv(
+            raw_dir / f"{stem}.csv", index=False,
+        )
+    elif fmt == "npz":
+        np.savez_compressed(raw_dir / f"{stem}.npz", t_s=t, v=y)
 
 
 def _acquire_with_retry(
@@ -550,6 +565,16 @@ def run_sweep(
     rf_source.set_output(False)
     time.sleep(0.2)
 
+    original_mdepth = None
+    if cfg.scope_memory_depth is not None and hasattr(scope, "set_memory_depth"):
+        original_mdepth = scope.get_memory_depth()
+        scope.set_memory_depth(cfg.scope_memory_depth)
+        if verbose:
+            print(f"Scope memory depth: {original_mdepth} -> {cfg.scope_memory_depth}")
+
+    if hasattr(scope, "prepare_for_readout"):
+        scope.prepare_for_readout(scope_channel)
+
     results: List[Dict] = []
     reference_rows: List[Dict] = []
 
@@ -561,6 +586,7 @@ def run_sweep(
     n_total = n_freqs * (1 + n_powers)  # 1 reference + n_powers per frequency
     pbar = tqdm(total=n_total, desc="Vpi sweep", unit="pt",
                 disable=not verbose, leave=True)
+    point_counter = 0
 
     try:
         for freq_hz in cfg.rf_frequencies_hz:
@@ -629,9 +655,9 @@ def run_sweep(
                 )
 
             if cfg.save_raw_traces_csv:
-                pd.DataFrame({"t_s": t_ref, "v": y_ref}).to_csv(
-                    dirs["raw_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.csv",
-                    index=False,
+                _save_trace(
+                    dirs["raw_dir"], f"reference_{freq_hz/1e6:.4f}MHz",
+                    t_ref, y_ref, cfg.raw_trace_format,
                 )
 
             del t_ref, y_ref, ref_picked
@@ -646,6 +672,7 @@ def run_sweep(
 
             for power_dbm in cfg.rf_powers_dbm:
                 power_dbm = float(power_dbm)
+                point_counter += 1
                 pbar.set_postfix_str(
                     f"{freq_hz/1e9:.4f} GHz, {power_dbm:+.1f} dBm"
                 )
@@ -653,7 +680,7 @@ def run_sweep(
                     pbar.write(f"  power = {power_dbm:7.3f} dBm")
 
                 rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
-                time.sleep(cfg.settle_after_rf_change_s)
+                time.sleep(cfg.settle_after_power_change_s)
 
                 t, y, _ = _acquire_with_retry(
                     scope, scope_channel,
@@ -662,8 +689,11 @@ def run_sweep(
                     max_retries=cfg.scope_read_max_retries, verbose=verbose,
                 )
 
+                pp = preprocess_trace(y, cfg)
+
                 meas, picked = measure_trace_against_reference(
-                    t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg
+                    t=t, y_v=y, ref=ref, rf_frequency_hz=freq_hz, cfg=cfg,
+                    preprocessed=pp,
                 )
                 row = {
                     "rf_frequency_hz": freq_hz,
@@ -679,7 +709,12 @@ def run_sweep(
                 results.append(row)
                 sweep_csv.write_row(row)
 
-                if cfg.save_trace_plots:
+                do_plots = (
+                    cfg.plot_every_n_points <= 1
+                    or point_counter % cfg.plot_every_n_points == 1
+                )
+
+                if cfg.save_trace_plots and do_plots:
                     mode_label = cfg.sideband_mode.lower()
                     trace_label = f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}"
                     trace_stem = f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
@@ -692,9 +727,10 @@ def run_sweep(
                         out_png=dirs["traces_dir"] / f"{trace_stem}.png",
                         cfg=cfg,
                         picked_points=picked,
+                        preprocessed=pp,
                     )
 
-                if cfg.save_frequency_plots:
+                if cfg.save_frequency_plots and do_plots:
                     freq_label = (
                         f"Freq. space: f_RF={freq_hz/1e9:.6f} GHz, "
                         f"P_RF={power_dbm:.2f} dBm"
@@ -709,16 +745,17 @@ def run_sweep(
                         out_png=dirs["freq_dir"] / f"{freq_stem}.png",
                         cfg=cfg,
                         picked_points=picked,
+                        preprocessed=pp,
                     )
 
                 if cfg.save_raw_traces_csv:
-                    pd.DataFrame({"t_s": t, "v": y}).to_csv(
-                        dirs["raw_dir"]
-                        / f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.csv",
-                        index=False,
+                    _save_trace(
+                        dirs["raw_dir"],
+                        f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm",
+                        t, y, cfg.raw_trace_format,
                     )
 
-                del t, y, meas, picked
+                del t, y, meas, picked, pp
                 plt.close("all")
                 gc.collect()
 
@@ -728,6 +765,8 @@ def run_sweep(
         pbar.close()
         sweep_csv.close()
         ref_csv.close()
+        if original_mdepth is not None and hasattr(scope, "set_memory_depth"):
+            scope.set_memory_depth(original_mdepth)
 
     df = pd.DataFrame(results)
     ref_df = pd.DataFrame(reference_rows)

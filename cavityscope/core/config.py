@@ -28,9 +28,11 @@ class SweepConfig:
         default_factory=lambda: np.arange(-20.0, 10.1, 2.0).tolist()
     )
     settle_after_rf_change_s: float = 0.15
+    settle_after_power_change_s: float = 0.05
     settle_after_scope_single_s: float = 0.05
     trigger_timeout_s: float = 4.0
     scope_read_max_retries: int = 3
+    scope_memory_depth: Optional[int] = 100_000
 
     # -- Cavity / reference extraction -----------------------------------------
     cavity_fsr_hz: float = 1.5e9
@@ -103,7 +105,9 @@ class SweepConfig:
     save_trace_plots: bool = True
     save_reference_plots: bool = True
     save_raw_traces_csv: bool = True
+    raw_trace_format: str = "npy"
     save_frequency_plots: bool = True
+    plot_every_n_points: int = 1
 
     # -- S21-like resonance analysis -------------------------------------------
     # Computes sideband_fraction = (SB⁻+SB⁺)/(Carrier+SB⁻+SB⁺) and finds
