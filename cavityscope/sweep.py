@@ -10,7 +10,7 @@ from __future__ import annotations
 import gc
 import json
 import time
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -149,7 +149,6 @@ def run_power_calibration(
     rf_source.set_output(False)
     time.sleep(0.2)
 
-    rows: List[Dict] = []
     cal_csv = IncrementalCsvWriter(out / "power_calibration.csv")
     fit_plot_dir = ensure_dir(out / "fit_plots")
 
@@ -219,7 +218,6 @@ def run_power_calibration(
                     **{k: v for k, v in meas.items()
                        if k not in ("measured_vpk_v", "power_dbm")},
                 }
-                rows.append(row)
                 cal_csv.write_row(row)
 
                 if verbose:
@@ -253,7 +251,8 @@ def run_power_calibration(
         if verbose:
             print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
 
-    cal_df = pd.DataFrame(rows)
+    cal_path = out / "power_calibration.csv"
+    cal_df = pd.read_csv(cal_path) if cal_path.exists() else pd.DataFrame()
     calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
 
     if verbose:
@@ -304,11 +303,7 @@ def run_sa_power_calibration(
     """
     import math
 
-    from cavityscope.analysis.harmonics import (
-        build_harmonics_dataframe,
-        build_thd_dataframe,
-        compute_harmonic_metrics,
-    )
+    from cavityscope.analysis.harmonics import compute_harmonic_metrics
     from cavityscope.analysis.plotting import (
         plot_harmonic_heatmap,
         plot_harmonic_waterfall,
@@ -339,9 +334,10 @@ def run_sa_power_calibration(
     rf_source.set_output(False)
     time.sleep(0.2)
 
-    rows: List[Dict] = []
     cal_csv = IncrementalCsvWriter(out / "power_calibration.csv")
-    harmonic_measurements: List[Dict] = []
+    harmonics_csv_writer = IncrementalCsvWriter(out / "harmonics.csv")
+    thd_csv_writer = IncrementalCsvWriter(out / "thd_summary.csv")
+    has_harmonic_data = False
     spectrum_dir = ensure_dir(out / "spectra") if cfg.cal_sa_save_spectra else None
 
     n_total = len(cfg.rf_frequencies_hz) * len(cfg.rf_powers_dbm)
@@ -388,12 +384,26 @@ def run_sa_power_calibration(
 
                     metrics = compute_harmonic_metrics(harmonics_list)
 
-                    harmonic_measurements.append({
+                    has_harmonic_data = True
+                    fund_dbm = fund["power_dbm"]
+                    for h in harmonics_list:
+                        dbc = h["power_dbm"] - fund_dbm
+                        harmonics_csv_writer.write_row({
+                            "frequency_hz": freq_hz,
+                            "power_dbm": power_dbm,
+                            "harmonic_number": h["harmonic_number"],
+                            "nominal_freq_hz": h["nominal_freq_hz"],
+                            "measured_freq_hz": h["measured_freq_hz"],
+                            "harmonic_power_dbm": h["power_dbm"],
+                            "level_dbc": dbc,
+                        })
+                    thd_csv_writer.write_row({
                         "frequency_hz": freq_hz,
                         "power_dbm": power_dbm,
-                        "harmonics": harmonics_list,
-                        "metrics": metrics,
-                        "wideband_trace": (wb_freqs, wb_amps),
+                        "fundamental_power_dbm": metrics["fundamental_power_dbm"],
+                        "thd_percent": metrics["thd_percent"],
+                        "fundamental_power_fraction": metrics["fundamental_power_fraction"],
+                        "total_harmonic_power_dbm": metrics["total_harmonic_power_dbm"],
                     })
 
                     if spectrum_dir is not None:
@@ -422,6 +432,8 @@ def run_sa_power_calibration(
                                  if cfg.cal_sa_power_offset_db != 0.0 else "")
                               + f" → THD = {thd:.1f}%, "
                               f"fund = {frac*100:.1f}% of total")
+
+                    del wb_freqs, wb_amps, hdata
                 else:
                     measured_freq_hz, measured_dbm = sa.measure_power_at_frequency(
                         freq_hz=freq_hz,
@@ -430,6 +442,8 @@ def run_sa_power_calibration(
                         ref_level_dbm=cfg.cal_sa_ref_level_dbm,
                         settle_s=cfg.cal_sa_settle_s,
                     )
+                    harmonics_list = None
+                    metrics = None
                     if verbose:
                         corrected = measured_dbm + cfg.cal_sa_power_offset_db
                         pbar.write(f"    {power_dbm:+7.2f} dBm → "
@@ -448,19 +462,18 @@ def run_sa_power_calibration(
                     "measured_power_dbm": measured_dbm,
                     "measured_frequency_hz": measured_freq_hz,
                 }
-                if harmonic_measurements and harmonic_measurements[-1]["power_dbm"] == power_dbm:
-                    m = harmonic_measurements[-1]["metrics"]
-                    row["thd_percent"] = m["thd_percent"]
-                    row["fundamental_power_fraction"] = m["fundamental_power_fraction"]
-                    for h in harmonic_measurements[-1]["harmonics"]:
+                if harmonics_list is not None and metrics is not None:
+                    row["thd_percent"] = metrics["thd_percent"]
+                    row["fundamental_power_fraction"] = metrics["fundamental_power_fraction"]
+                    for h in harmonics_list:
                         k = h["harmonic_number"]
                         row[f"h{k}_power_dbm"] = h["power_dbm"]
                         if k >= 2:
                             row[f"h{k}_dbc"] = h["power_dbm"] - measured_dbm
 
-                rows.append(row)
                 cal_csv.write_row(row)
 
+                del row, harmonics_list, metrics
                 plt.close("all")
                 gc.collect()
 
@@ -470,16 +483,16 @@ def run_sa_power_calibration(
     finally:
         pbar.close()
         cal_csv.close()
+        harmonics_csv_writer.close()
+        thd_csv_writer.close()
 
-    cal_df = pd.DataFrame(rows)
+    cal_path = out / "power_calibration.csv"
+    cal_df = pd.read_csv(cal_path) if cal_path.exists() else pd.DataFrame()
     calibration = build_calibration(cal_df, output_dir=out, verbose=verbose)
 
-    if harmonic_measurements:
-        harmonics_df = build_harmonics_dataframe(harmonic_measurements)
-        thd_df = build_thd_dataframe(harmonic_measurements)
-
-        harmonics_df.to_csv(out / "harmonics.csv", index=False)
-        thd_df.to_csv(out / "thd_summary.csv", index=False)
+    if has_harmonic_data:
+        harmonics_df = pd.read_csv(out / "harmonics.csv")
+        thd_df = pd.read_csv(out / "thd_summary.csv")
 
         try:
             plot_thd_summary(thd_df, out / "thd_summary.png")
@@ -575,9 +588,6 @@ def run_sweep(
     if hasattr(scope, "prepare_for_readout"):
         scope.prepare_for_readout(scope_channel)
 
-    results: List[Dict] = []
-    reference_rows: List[Dict] = []
-
     sweep_csv = IncrementalCsvWriter(run_dir / "sweep_results.csv")
     ref_csv = IncrementalCsvWriter(run_dir / "reference_summary.csv")
 
@@ -618,7 +628,6 @@ def run_sweep(
                 "sideband_window_hz": cfg.sideband_window_hz,
                 "reference_carrier_area_v_s": ref_carrier_area,
             }
-            reference_rows.append(ref_row)
             ref_csv.write_row(ref_row)
 
             ref_picked = {
@@ -706,7 +715,6 @@ def run_sweep(
                     calibration=calibration,
                     rf_frequency_hz=freq_hz,
                 )
-                results.append(row)
                 sweep_csv.write_row(row)
 
                 do_plots = (
@@ -755,7 +763,7 @@ def run_sweep(
                         t, y, cfg.raw_trace_format,
                     )
 
-                del t, y, meas, picked, pp
+                del t, y, meas, picked, pp, row
                 plt.close("all")
                 gc.collect()
 
@@ -768,8 +776,10 @@ def run_sweep(
         if original_mdepth is not None and hasattr(scope, "set_memory_depth"):
             scope.set_memory_depth(original_mdepth)
 
-    df = pd.DataFrame(results)
-    ref_df = pd.DataFrame(reference_rows)
+    sweep_path = run_dir / "sweep_results.csv"
+    ref_path = run_dir / "reference_summary.csv"
+    df = pd.read_csv(sweep_path) if sweep_path.exists() else pd.DataFrame()
+    ref_df = pd.read_csv(ref_path) if ref_path.exists() else pd.DataFrame()
     fit_df = compute_vpi_fits(df, cfg, output_dir=run_dir)
 
     fit_df.to_csv(run_dir / "vpi_fit_summary.csv", index=False)

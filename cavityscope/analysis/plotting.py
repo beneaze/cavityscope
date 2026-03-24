@@ -143,6 +143,7 @@ def plot_trace_with_windows(
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -234,6 +235,7 @@ def plot_trace_frequency_space(
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -310,6 +312,7 @@ def plot_beta_fit(
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -422,6 +425,7 @@ def plot_power_calibration(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -488,6 +492,7 @@ def plot_vpi_vs_frequency(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -558,6 +563,7 @@ def plot_sa_spectrum(
     ax.legend(loc="upper right", fontsize=7)
     fig.tight_layout()
     fig.savefig(out_png, dpi=130)
+    fig.clf()
     plt.close(fig)
 
 
@@ -603,6 +609,7 @@ def plot_harmonic_waterfall(
     ax.grid(True, axis="y", alpha=0.25)
     fig.tight_layout()
     fig.savefig(out_png, dpi=130)
+    fig.clf()
     plt.close(fig)
 
 
@@ -643,6 +650,7 @@ def plot_thd_summary(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -688,6 +696,7 @@ def plot_harmonic_heatmap(
     fig.colorbar(im, ax=ax, label="dBc", shrink=0.85)
     fig.tight_layout()
     fig.savefig(out_png, dpi=140)
+    fig.clf()
     plt.close(fig)
 
 
@@ -844,6 +853,7 @@ def plot_s21_resonance_map(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
+    fig.clf()
     plt.close(fig)
 
 
@@ -933,6 +943,7 @@ def plot_s21_full_analysis(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
+    fig.clf()
     plt.close(fig)
 
 
@@ -984,6 +995,7 @@ def plot_s21_power_overlay(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
+    fig.clf()
     plt.close(fig)
 
 
@@ -1053,4 +1065,5 @@ def plot_calibration_fit(
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=120)
+    fig.clf()
     plt.close(fig)
