@@ -354,7 +354,7 @@ def _add_line_labels(ax: plt.Axes, lines, labels, fontsize: float = 7) -> None:
 
 def plot_power_calibration(
     cal_df: pd.DataFrame,
-    out_png: Path | str,
+    out_png: Path | str | None = None,
 ) -> None:
     """Plot power calibration (works for both scope-based and SA-based data).
 
@@ -364,6 +364,9 @@ def plot_power_calibration(
 
     Frequency labels are placed next to each line on the right side of the
     plot instead of inside a legend, keeping the plot area clean.
+
+    If *out_png* is ``None`` the figure is shown interactively (useful in
+    notebooks) instead of being saved to disk.
     """
     if cal_df.empty:
         return
@@ -441,9 +444,12 @@ def plot_power_calibration(
         ax_freq.grid(True, alpha=0.25)
 
     fig.tight_layout()
-    fig.savefig(out_png, dpi=140)
-    fig.clf()
-    plt.close(fig)
+    if out_png is not None:
+        fig.savefig(out_png, dpi=140)
+        fig.clf()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 # Keep the old name as an alias
@@ -452,13 +458,16 @@ plot_live_calibration = plot_power_calibration
 
 def plot_vpi_vs_frequency(
     fit_df: pd.DataFrame,
-    out_png: Path | str,
+    out_png: Path | str | None = None,
 ) -> None:
     """Plot Vpi and fit R squared as a function of RF frequency.
 
     The top panel shows Vpi(f) with a median reference line and the number
     of fit points annotated at each frequency. The bottom panel shows the
     fit R squared so you can spot unreliable fits at a glance.
+
+    If *out_png* is ``None`` the figure is shown interactively (useful in
+    notebooks) instead of being saved to disk.
     """
     if fit_df.empty or "fit_vpi_v" not in fit_df.columns:
         return
@@ -508,9 +517,12 @@ def plot_vpi_vs_frequency(
     ax_r2.legend(loc="best")
 
     fig.tight_layout()
-    fig.savefig(out_png, dpi=140)
-    fig.clf()
-    plt.close(fig)
+    if out_png is not None:
+        fig.savefig(out_png, dpi=140)
+        fig.clf()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_sa_spectrum(
