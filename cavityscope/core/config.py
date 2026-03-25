@@ -45,9 +45,8 @@ class SweepConfig:
     min_reference_peaks_required: int = 2
     reference_carrier_pick: str = "highest"
 
-    # -- Integration windows (in frequency domain) -----------------------------
-    carrier_window_hz: float = 120e6
-    sideband_window_hz: float = 80e6
+    # -- Integration window (in frequency domain) ------------------------------
+    integration_window_hz: float = 100e6
 
     # -- Sideband selection ----------------------------------------------------
     sideband_mode: str = "both"

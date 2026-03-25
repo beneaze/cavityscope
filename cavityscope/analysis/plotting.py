@@ -89,11 +89,8 @@ def plot_trace_with_windows(
     del y_bs, y_sm
 
     fsr_hz = cfg.cavity_fsr_hz
-    carrier_hw = hz_window_to_half_time(
-        cfg.carrier_window_hz, fsr_hz, ref.fsr_time_s
-    )
-    sideband_hw = hz_window_to_half_time(
-        cfg.sideband_window_hz, fsr_hz, ref.fsr_time_s
+    half_win = hz_window_to_half_time(
+        cfg.integration_window_hz, fsr_hz, ref.fsr_time_s
     )
     dt_sb = ref.fsr_time_s * (rf_frequency_hz / fsr_hz)
     carrier_t = ref.chosen_carrier_time_s
@@ -114,20 +111,20 @@ def plot_trace_with_windows(
     ax.plot(t_plot, y_sm_ds, lw=1.0, label="smoothed")
 
     ax.axvspan(
-        (carrier_t - carrier_hw) * 1e3,
-        (carrier_t + carrier_hw) * 1e3,
+        (carrier_t - half_win) * 1e3,
+        (carrier_t + half_win) * 1e3,
         alpha=0.12,
         label="carrier window",
     )
     ax.axvspan(
-        (sb_m_t - sideband_hw) * 1e3,
-        (sb_m_t + sideband_hw) * 1e3,
+        (sb_m_t - half_win) * 1e3,
+        (sb_m_t + half_win) * 1e3,
         alpha=0.12,
         label="-1 sb window",
     )
     ax.axvspan(
-        (sb_p_t - sideband_hw) * 1e3,
-        (sb_p_t + sideband_hw) * 1e3,
+        (sb_p_t - half_win) * 1e3,
+        (sb_p_t + half_win) * 1e3,
         alpha=0.12,
         label="+1 sb window",
     )
@@ -185,8 +182,7 @@ def plot_trace_frequency_space(
     f_ds, y_bs_ds, y_sm_ds = _downsample_for_plot(f_rel_ghz, y_bs, y_sm)
     del f_rel_ghz, y_bs, y_sm
 
-    carrier_half_hz = 0.5 * cfg.carrier_window_hz
-    sideband_half_hz = 0.5 * cfg.sideband_window_hz
+    half_hz = 0.5 * cfg.integration_window_hz
 
     if reuse_fig is not None:
         fig = reuse_fig
@@ -200,8 +196,8 @@ def plot_trace_frequency_space(
     ax.plot(f_ds, y_sm_ds, lw=1.0, label="smoothed")
 
     ax.axvspan(
-        -carrier_half_hz / 1e9,
-        carrier_half_hz / 1e9,
+        -half_hz / 1e9,
+        half_hz / 1e9,
         color="C0",
         alpha=0.12,
         label="carrier window",
@@ -209,15 +205,15 @@ def plot_trace_frequency_space(
     if rf_frequency_hz > 0:
         sb_ghz = rf_frequency_hz / 1e9
         ax.axvspan(
-            -sb_ghz - sideband_half_hz / 1e9,
-            -sb_ghz + sideband_half_hz / 1e9,
+            -sb_ghz - half_hz / 1e9,
+            -sb_ghz + half_hz / 1e9,
             color="C1",
             alpha=0.12,
             label="\u22121 sb window",
         )
         ax.axvspan(
-            sb_ghz - sideband_half_hz / 1e9,
-            sb_ghz + sideband_half_hz / 1e9,
+            sb_ghz - half_hz / 1e9,
+            sb_ghz + half_hz / 1e9,
             color="C2",
             alpha=0.12,
             label="+1 sb window",

@@ -85,21 +85,18 @@ def measure_trace_against_reference(
     sb_minus_t = carrier_t - dt_sb
     sb_plus_t = carrier_t + dt_sb
 
-    carrier_hw = hz_window_to_half_time(
-        cfg.carrier_window_hz, fsr_hz, ref.fsr_time_s
-    )
-    sideband_hw = hz_window_to_half_time(
-        cfg.sideband_window_hz, fsr_hz, ref.fsr_time_s
+    half_win = hz_window_to_half_time(
+        cfg.integration_window_hz, fsr_hz, ref.fsr_time_s
     )
 
     carrier_area, carrier_h, carrier_n = _integrate_window(
-        t, y_sm, carrier_t, carrier_hw
+        t, y_sm, carrier_t, half_win
     )
     sb_m_area, sb_m_h, sb_m_n = _integrate_window(
-        t, y_sm, sb_minus_t, sideband_hw
+        t, y_sm, sb_minus_t, half_win
     )
     sb_p_area, sb_p_h, sb_p_n = _integrate_window(
-        t, y_sm, sb_plus_t, sideband_hw
+        t, y_sm, sb_plus_t, half_win
     )
 
     noise_sigma = robust_noise_sigma(y_bs)
@@ -148,10 +145,8 @@ def measure_trace_against_reference(
         "sideband_mode_used": mode,
         "sb_to_carrier_ratio": ratio,
         "beta_est": beta,
-        "carrier_window_hz": float(cfg.carrier_window_hz),
-        "sideband_window_hz": float(cfg.sideband_window_hz),
-        "carrier_window_s": 2.0 * carrier_hw,
-        "sideband_window_s": 2.0 * sideband_hw,
+        "integration_window_hz": float(cfg.integration_window_hz),
+        "integration_window_s": 2.0 * half_win,
         "used_for_vpi_fit": bool(used),
     }
 
@@ -216,8 +211,8 @@ def compute_carrier_area(
     for S21-like and overdriving metrics.
     """
     _, _, y_sm = _smooth_and_baseline(y_v, cfg)
-    carrier_hw = hz_window_to_half_time(
-        cfg.carrier_window_hz, cfg.cavity_fsr_hz, ref.fsr_time_s,
+    half_win = hz_window_to_half_time(
+        cfg.integration_window_hz, cfg.cavity_fsr_hz, ref.fsr_time_s,
     )
-    area, _, _ = _integrate_window(t, y_sm, ref.chosen_carrier_time_s, carrier_hw)
+    area, _, _ = _integrate_window(t, y_sm, ref.chosen_carrier_time_s, half_win)
     return area

@@ -645,8 +645,7 @@ def run_sweep(
                 "n_reference_carriers": len(ref.all_carrier_times_s),
                 "chosen_carrier_time_s": ref.chosen_carrier_time_s,
                 "chosen_carrier_height_v": ref.chosen_carrier_height_v,
-                "carrier_window_hz": cfg.carrier_window_hz,
-                "sideband_window_hz": cfg.sideband_window_hz,
+                "integration_window_hz": cfg.integration_window_hz,
                 "reference_carrier_area_v_s": ref_carrier_area,
             }
             ref_csv.write_row(ref_row)
