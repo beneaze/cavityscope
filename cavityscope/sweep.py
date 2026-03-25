@@ -76,11 +76,15 @@ def _acquire_with_retry(
     verbose: bool = False,
 ):
     """Acquire a single trace, retrying on empty data or read errors."""
+    has_fast = hasattr(scope, "read_waveform_fast")
     last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
             scope.acquire_single_and_wait(timeout_s=timeout_s, settle_s=settle_s)
-            t, y, info = scope.read_waveform(channel)
+            if has_fast:
+                t, y, info = scope.read_waveform_fast()
+            else:
+                t, y, info = scope.read_waveform(channel)
             if t.size > 0:
                 return t, y, info
             reason = "empty waveform"

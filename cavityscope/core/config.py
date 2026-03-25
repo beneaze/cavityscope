@@ -28,8 +28,8 @@ class SweepConfig:
         default_factory=lambda: np.arange(-20.0, 10.1, 2.0).tolist()
     )
     settle_after_rf_change_s: float = 0.15
-    settle_after_power_change_s: float = 0.05
-    settle_after_scope_single_s: float = 0.05
+    settle_after_power_change_s: float = 0.02
+    settle_after_scope_single_s: float = 0.02
     trigger_timeout_s: float = 4.0
     scope_read_max_retries: int = 3
     scope_memory_depth: Optional[int] = 100_000
