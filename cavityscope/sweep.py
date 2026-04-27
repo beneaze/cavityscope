@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gc
 import json
+import multiprocessing as mp
 import time
 from typing import Dict, Optional
 
@@ -53,6 +54,111 @@ from cavityscope.core.utils import (
 )
 
 
+class _PlotWorker:
+    """Background *process* that renders matplotlib plots without blocking the sweep.
+
+    Jobs are ``(func, args, kwargs)`` tuples processed sequentially in a
+    child process that owns its own ``Figure`` and GIL.  A bounded
+    :class:`multiprocessing.Queue` provides back-pressure so memory stays
+    flat even when the main loop runs faster than plotting.
+
+    Using a process instead of a thread avoids Python GIL contention —
+    CPU-bound ``savefig`` work runs truly in parallel with the main
+    process's VISA I/O.
+    """
+
+    def __init__(self, maxsize: int = 4):
+        self._q: mp.Queue = mp.Queue(maxsize=maxsize)
+        self._proc = mp.Process(target=self._run, args=(self._q,), daemon=True)
+        self._proc.start()
+
+    @staticmethod
+    def _run(q: mp.Queue) -> None:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        fig = Figure()
+        FigureCanvasAgg(fig)
+        while True:
+            job = q.get()
+            if job is None:
+                break
+            func, args, kwargs = job
+            kwargs["reuse_fig"] = fig
+            try:
+                func(*args, **kwargs)
+            except Exception:
+                pass
+            finally:
+                try:
+                    fig.clear()
+                except Exception:
+                    pass
+        fig.clf()
+        del fig
+
+    def submit(self, func, *args, **kwargs) -> None:
+        """Enqueue a plotting job.  Blocks if the queue is full."""
+        self._q.put((func, args, kwargs))
+
+    def shutdown(self) -> None:
+        """Wait for all queued jobs to finish, then stop the process."""
+        self._q.put(None)
+        self._proc.join(timeout=60)
+        if self._proc.is_alive():
+            self._proc.kill()
+
+
+class _SweepTimer:
+    """Accumulates per-phase wall-clock durations and prints periodic summaries."""
+
+    PHASES = ("rf_set", "settle", "acquire", "read", "analysis",
+              "plot_q", "save", "other")
+
+    def __init__(self, print_every: int = 10):
+        self._print_every = print_every
+        self._counts: Dict[str, list] = {p: [] for p in self.PHASES}
+        self._batch: Dict[str, list] = {p: [] for p in self.PHASES}
+        self._n = 0
+
+    def add(self, phase: str, seconds: float) -> None:
+        self._counts[phase].append(seconds)
+        self._batch[phase].append(seconds)
+
+    def tick(self, pbar) -> None:
+        """Call after each point.  Prints a summary every *print_every* pts."""
+        self._n += 1
+        if self._n == 1 or self._n % self._print_every == 0:
+            n_batch = len(self._batch[self.PHASES[0]])
+            label = "first pt" if self._n == 1 else f"last {n_batch} pts avg"
+            parts = []
+            for p in self.PHASES:
+                vals = self._batch[p]
+                if vals:
+                    avg_ms = sum(vals) / len(vals) * 1e3
+                    parts.append(f"{p}={avg_ms:.0f}ms")
+            total_ms = sum(sum(v) for v in self._batch.values()) / max(
+                n_batch, 1) * 1e3
+            parts.append(f"total={total_ms:.0f}ms")
+            pbar.write(f"  [timing] {label}: " + "  ".join(parts))
+            self._batch = {p: [] for p in self.PHASES}
+
+    def summary(self) -> str:
+        """Return an overall-average summary string."""
+        if not self._counts[self.PHASES[0]]:
+            return "[timing] no data collected"
+        parts = []
+        for p in self.PHASES:
+            vals = self._counts[p]
+            if vals:
+                avg_ms = sum(vals) / len(vals) * 1e3
+                parts.append(f"{p}={avg_ms:.0f}ms")
+        n = len(self._counts[self.PHASES[0]])
+        total_ms = sum(sum(v) for v in self._counts.values()) / n * 1e3
+        parts.append(f"total={total_ms:.0f}ms")
+        return f"[timing] {n} pts overall avg: " + "  ".join(parts)
+
+
 def _save_trace(
     raw_dir, stem: str, t: np.ndarray, y: np.ndarray, fmt: str,
 ) -> None:
@@ -74,18 +180,29 @@ def _acquire_with_retry(
     settle_s: float,
     max_retries: int = 3,
     verbose: bool = False,
+    split_timing: bool = False,
 ):
-    """Acquire a single trace, retrying on empty data or read errors."""
+    """Acquire a single trace, retrying on empty data or read errors.
+
+    When *split_timing* is True the return value is
+    ``(t, y, info, acquire_s, read_s)`` where *acquire_s* is the wall-clock
+    time for ``acquire_single_and_wait`` and *read_s* for the waveform read.
+    """
     has_fast = hasattr(scope, "read_waveform_fast")
     last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
+            t0 = time.perf_counter()
             scope.acquire_single_and_wait(timeout_s=timeout_s, settle_s=settle_s)
+            t1 = time.perf_counter()
             if has_fast:
                 t, y, info = scope.read_waveform_fast()
             else:
                 t, y, info = scope.read_waveform(channel)
+            t2 = time.perf_counter()
             if t.size > 0:
+                if split_timing:
+                    return t, y, info, t1 - t0, t2 - t1
                 return t, y, info
             reason = "empty waveform"
         except Exception as exc:
@@ -165,8 +282,7 @@ def run_power_calibration(
     pbar = tqdm(total=n_total, desc="Scope cal", unit="pt",
                 disable=not verbose, leave=True)
 
-    _plot_fig = Figure()
-    FigureCanvasAgg(_plot_fig)
+    plot_worker = _PlotWorker()
 
     try:
         for freq_hz in cfg.rf_frequencies_hz:
@@ -233,32 +349,23 @@ def run_power_calibration(
                     ok = "ok" if meas["fit_converged"] else "FALLBACK"
                     pbar.write(f"    {power_dbm:+7.2f} dBm → Vpk = {meas['measured_vpk_v']:.4f} V  [{ok}]")
 
-                try:
-                    plot_calibration_fit(
-                        t_rf, v_rf,
-                        rf_frequency_hz=freq_hz,
-                        meas=meas,
-                        out_png=fit_plot_dir
-                        / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
-                        n_cycles=fit_cycles,
-                        reuse_fig=_plot_fig,
-                    )
-                except Exception as exc:
-                    if verbose:
-                        pbar.write(f"    [warning] fit plot failed: {exc}")
-
-                del t_rf, v_rf, meas
-                plt.close("all")
-                gc.collect()
+                plot_worker.submit(
+                    plot_calibration_fit,
+                    t_rf, v_rf,
+                    rf_frequency_hz=freq_hz,
+                    meas=meas,
+                    out_png=fit_plot_dir
+                    / f"cal_fit_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm.png",
+                    n_cycles=fit_cycles,
+                )
 
                 pbar.update(1)
 
         rf_source.set_output(False)
     finally:
+        plot_worker.shutdown()
         pbar.close()
         cal_csv.close()
-        _plot_fig.clf()
-        del _plot_fig
         scope.set_timebase(original_timebase)
         if verbose:
             print(f"\n  Restored timebase: {original_timebase:.3E} s/div")
@@ -616,8 +723,9 @@ def run_sweep(
                 disable=not verbose, leave=True)
     point_counter = 0
 
-    _plot_fig = Figure()
-    FigureCanvasAgg(_plot_fig)
+    plot_worker = _PlotWorker()
+    timer = _SweepTimer(print_every=50) if verbose else None
+    _pc = time.perf_counter
 
     try:
         for freq_hz in cfg.rf_frequencies_hz:
@@ -625,16 +733,23 @@ def run_sweep(
             if verbose:
                 pbar.write(f"\n=== RF frequency: {freq_hz/1e9:.6f} GHz ===")
 
+            # --- reference acquisition (timed) ---
+            _t0 = _pc()
             pbar.set_postfix_str(f"{freq_hz/1e9:.4f} GHz, ref")
             rf_source.apply(freq_hz=freq_hz, enabled=False)
+            _t1 = _pc()
             time.sleep(cfg.settle_after_rf_change_s)
+            _t2 = _pc()
 
-            t_ref, y_ref, _ = _acquire_with_retry(
+            t_ref, y_ref, _, acq_s, rd_s = _acquire_with_retry(
                 scope, scope_channel,
                 timeout_s=cfg.trigger_timeout_s,
                 settle_s=cfg.settle_after_scope_single_s,
                 max_retries=cfg.scope_read_max_retries, verbose=verbose,
+                split_timing=True,
             )
+            _t3 = _pc()
+
             ref = analyze_reference_trace(t_ref, y_ref, freq_hz, cfg)
             ref_carrier_area = compute_carrier_area(t_ref, y_ref, ref, cfg)
 
@@ -658,9 +773,11 @@ def run_sweep(
                 "sb_plus_times_s": np.asarray([]),
                 "sb_plus_heights_v": np.asarray([]),
             }
+            _t4 = _pc()
 
             if cfg.save_reference_plots:
-                plot_trace_with_windows(
+                plot_worker.submit(
+                    plot_trace_with_windows,
                     t_ref,
                     y_ref,
                     ref,
@@ -669,12 +786,11 @@ def run_sweep(
                     out_png=dirs["refs_dir"] / f"reference_{freq_hz/1e6:.4f}MHz.png",
                     cfg=cfg,
                     picked_points=ref_picked,
-                    reuse_fig=_plot_fig,
                 )
-                gc.collect()
 
             if cfg.save_frequency_plots:
-                plot_trace_frequency_space(
+                plot_worker.submit(
+                    plot_trace_frequency_space,
                     t_ref,
                     y_ref,
                     ref,
@@ -683,18 +799,26 @@ def run_sweep(
                     out_png=dirs["freq_dir"] / f"freq_reference_{freq_hz/1e6:.4f}MHz.png",
                     cfg=cfg,
                     picked_points=ref_picked,
-                    reuse_fig=_plot_fig,
                 )
+            _t5 = _pc()
 
             if cfg.save_raw_traces_csv:
                 _save_trace(
                     dirs["raw_dir"], f"reference_{freq_hz/1e6:.4f}MHz",
                     t_ref, y_ref, cfg.raw_trace_format,
                 )
+            _t6 = _pc()
 
-            del t_ref, y_ref, ref_picked
-            plt.close("all")
-            gc.collect()
+            if timer is not None:
+                timer.add("rf_set", _t1 - _t0)
+                timer.add("settle", _t2 - _t1)
+                timer.add("acquire", acq_s)
+                timer.add("read", rd_s)
+                timer.add("analysis", _t4 - _t3)
+                timer.add("plot_q", _t5 - _t4)
+                timer.add("save", _t6 - _t5)
+                timer.add("other", (_t3 - _t2) - acq_s - rd_s)
+                timer.tick(pbar)
 
             pbar.update(1)
 
@@ -711,15 +835,20 @@ def run_sweep(
                 if verbose:
                     pbar.write(f"  power = {power_dbm:7.3f} dBm")
 
+                _t0 = _pc()
                 rf_source.apply(freq_hz=freq_hz, power_dbm=power_dbm)
+                _t1 = _pc()
                 time.sleep(cfg.settle_after_power_change_s)
+                _t2 = _pc()
 
-                t, y, _ = _acquire_with_retry(
+                t, y, _, acq_s, rd_s = _acquire_with_retry(
                     scope, scope_channel,
                     timeout_s=cfg.trigger_timeout_s,
                     settle_s=cfg.settle_after_scope_single_s,
                     max_retries=cfg.scope_read_max_retries, verbose=verbose,
+                    split_timing=True,
                 )
+                _t3 = _pc()
 
                 pp = preprocess_trace(y, cfg)
 
@@ -739,6 +868,7 @@ def run_sweep(
                     rf_frequency_hz=freq_hz,
                 )
                 sweep_csv.write_row(row)
+                _t4 = _pc()
 
                 do_plots = (
                     cfg.plot_every_n_points <= 1
@@ -749,7 +879,8 @@ def run_sweep(
                     mode_label = cfg.sideband_mode.lower()
                     trace_label = f"f_RF={freq_hz/1e9:.6f} GHz, P_RF={power_dbm:.2f} dBm, mode={mode_label}"
                     trace_stem = f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
-                    plot_trace_with_windows(
+                    plot_worker.submit(
+                        plot_trace_with_windows,
                         t,
                         y,
                         ref,
@@ -759,9 +890,7 @@ def run_sweep(
                         cfg=cfg,
                         picked_points=picked,
                         preprocessed=pp,
-                        reuse_fig=_plot_fig,
                     )
-                    gc.collect()
 
                 if cfg.save_frequency_plots and do_plots:
                     freq_label = (
@@ -769,7 +898,8 @@ def run_sweep(
                         f"P_RF={power_dbm:.2f} dBm"
                     )
                     freq_stem = f"freq_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm"
-                    plot_trace_frequency_space(
+                    plot_worker.submit(
+                        plot_trace_frequency_space,
                         t,
                         y,
                         ref,
@@ -779,8 +909,8 @@ def run_sweep(
                         cfg=cfg,
                         picked_points=picked,
                         preprocessed=pp,
-                        reuse_fig=_plot_fig,
                     )
+                _t5 = _pc()
 
                 if cfg.save_raw_traces_csv:
                     _save_trace(
@@ -788,19 +918,28 @@ def run_sweep(
                         f"trace_{freq_hz/1e6:.4f}MHz_{power_dbm:+06.2f}dBm",
                         t, y, cfg.raw_trace_format,
                     )
+                _t6 = _pc()
 
-                del t, y, meas, picked, pp, row
-                plt.close("all")
-                gc.collect()
+                if timer is not None:
+                    timer.add("rf_set", _t1 - _t0)
+                    timer.add("settle", _t2 - _t1)
+                    timer.add("acquire", acq_s)
+                    timer.add("read", rd_s)
+                    timer.add("analysis", _t4 - _t3)
+                    timer.add("plot_q", _t5 - _t4)
+                    timer.add("save", _t6 - _t5)
+                    timer.add("other", (_t3 - _t2) - acq_s - rd_s)
+                    timer.tick(pbar)
 
                 pbar.update(1)
 
     finally:
+        plot_worker.shutdown()
+        if timer is not None:
+            print(f"\n{timer.summary()}")
         pbar.close()
         sweep_csv.close()
         ref_csv.close()
-        _plot_fig.clf()
-        del _plot_fig
         if original_mdepth is not None and hasattr(scope, "set_memory_depth"):
             scope.set_memory_depth(original_mdepth)
 
